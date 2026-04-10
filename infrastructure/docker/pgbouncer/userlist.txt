@@ -1,0 +1,23 @@
+# PgBouncer Kullanıcı Listesi
+#
+# Format: "kullanici_adi" "scram-sha-256$<iterations>$<salt>$<stored_key>$<server_key>"
+#
+# UYARI: Bu dosyada gerçek şifre hashları olmamalıdır.
+# Üretim ortamında bu dosya Vault Agent tarafından dinamik olarak oluşturulur:
+#   /vault/config/userlist.tmpl → /etc/pgbouncer/userlist.txt
+#
+# Şablon (vault agent template):
+#   {{- with secret "enkap/production/database" -}}
+#   "{{ .Data.data.username }}" "{{ .Data.data.scram_hash }}"
+#   "pgbouncer_admin" "{{ .Data.data.admin_scram_hash }}"
+#   {{- end }}
+#
+# Şifre hash'i üretimi (PostgreSQL):
+#   SELECT 'SCRAM-SHA-256$' || ... (pg_saslprep ile)
+#
+# Geliştirme ortamı için placeholder (docker-compose ile kullanılır):
+# Gerçek hash'ler docker-compose.override.yml veya .env dosyasında tanımlanır.
+#
+"enkap_app" "PLACEHOLDER_SCRAM_HASH_app"
+"pgbouncer_admin" "PLACEHOLDER_SCRAM_HASH_admin"
+"pgbouncer_monitor" "PLACEHOLDER_SCRAM_HASH_monitor"

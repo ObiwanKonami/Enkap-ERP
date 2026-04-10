@@ -1,0 +1,160 @@
+# PostgreSQL Yedekleme CronJob
+#
+# Her gece 02:00 UTC+3'te çalışır (23:00 UTC).
+# pg_dump ile her veritabanını ayrı ayrı yedekler.
+# Sıkıştırılmış dump → MinIO (S3-uyumlu) üzerine yükler.
+#
+# Yedek adlandırma: enkap-{dbname}-{YYYY-MM-DD}.dump.gz
+# Saklama politikası: 7 günlük + 4 haftalık + 12 aylık (lifecycle ile yönetilir)
+#
+# Gereksinimler:
+#   - Secret: pg-backup-credentials (PGPASSWORD, MINIO_ACCESS_KEY, MINIO_SECRET_KEY)
+#   - ConfigMap: pg-backup-config (MINIO_ENDPOINT, MINIO_BUCKET, databases listesi)
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pg-backup
+  namespace: enkap-production
+  labels:
+    app.kubernetes.io/part-of: enkap-erp
+    app.kubernetes.io/component: backup
+spec:
+  # Her gece 23:00 UTC (02:00 Istanbul)
+  schedule: "0 23 * * *"
+  timeZone: "UTC"
+  concurrencyPolicy: Forbid       # Önceki backup bitmeden yenisi başlamaz
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 3600  # Max 1 saat — büyük DB için artırılabilir
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/component: pg-backup
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: pg-backup
+              image: postgres:16-alpine
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+                  DATE=$(date +%Y-%m-%d)
+                  MONTH=$(date +%Y-%m)
+
+                  echo "[backup] Başlıyor: $DATE"
+
+                  # MinIO client kur
+                  apk add --no-cache curl > /dev/null
+                  curl -sSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc
+                  chmod +x /usr/local/bin/mc
+                  mc alias set minio "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+
+                  for DB in $DATABASES; do
+                    echo "[backup] Yedekleniyor: $DB"
+                    FILENAME="enkap-${DB}-${DATE}.dump.gz"
+
+                    pg_dump \
+                      -h "$PGHOST" \
+                      -p "$PGPORT" \
+                      -U "$PGUSER" \
+                      -d "$DB" \
+                      -Fc \
+                      --no-password \
+                      | gzip -9 > "/tmp/${FILENAME}"
+
+                    # Günlük dizine yükle
+                    mc cp "/tmp/${FILENAME}" "minio/${MINIO_BUCKET}/daily/${FILENAME}"
+
+                    # Aylık arşiv (ayın 1'i ise)
+                    if [ "$(date +%d)" = "01" ]; then
+                      mc cp "/tmp/${FILENAME}" "minio/${MINIO_BUCKET}/monthly/${MONTH}/${FILENAME}"
+                      echo "[backup] Aylık arşiv: ${MONTH}/${FILENAME}"
+                    fi
+
+                    rm -f "/tmp/${FILENAME}"
+                    echo "[backup] Tamamlandı: $DB"
+                  done
+
+                  echo "[backup] Tüm yedekler tamamlandı."
+              env:
+                - name: PGHOST
+                  value: "pgbouncer.enkap-production.svc.cluster.local"
+                - name: PGPORT
+                  value: "6432"
+                - name: PGUSER
+                  value: "enkap_backup"
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: pg-backup-credentials
+                      key: PGPASSWORD
+                - name: DATABASES
+                  valueFrom:
+                    configMapKeyRef:
+                      name: pg-backup-config
+                      key: DATABASES
+                - name: MINIO_ENDPOINT
+                  valueFrom:
+                    configMapKeyRef:
+                      name: pg-backup-config
+                      key: MINIO_ENDPOINT
+                - name: MINIO_BUCKET
+                  valueFrom:
+                    configMapKeyRef:
+                      name: pg-backup-config
+                      key: MINIO_BUCKET
+                - name: MINIO_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: pg-backup-credentials
+                      key: MINIO_ACCESS_KEY
+                - name: MINIO_SECRET_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: pg-backup-credentials
+                      key: MINIO_SECRET_KEY
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: "256Mi"
+                limits:
+                  cpu: "500m"
+                  memory: "1Gi"
+---
+# ConfigMap — yedek konfigürasyonu
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pg-backup-config
+  namespace: enkap-production
+data:
+  # Boşlukla ayrılmış yedeklenecek veritabanları
+  # enkap_control_plane: tenant routing, subscriptions, billing
+  # Tenant DB'leri ayrı pg_dump ile yedeklenir (her tenant için ayrı schema)
+  DATABASES: "enkap_control_plane enkap_analytics"
+  MINIO_ENDPOINT: "http://minio.enkap-production.svc.cluster.local:9000"
+  MINIO_BUCKET: "enkap-backups"
+---
+# Secret — hassas credentials (Vault External Secret ile yönetilir)
+# Üretimde bu Secret external-secrets-operator ile Vault'tan çekilir.
+# Buradaki değerler placeholder — gerçek üretimde kullanılmaz.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pg-backup-credentials
+  namespace: enkap-production
+  annotations:
+    # external-secrets.io/vault-path: "secret/enkap/backup"
+    # Vault'tan inject için ExternalSecret resource kullanılır
+    note: "Bu değerler Vault ExternalSecret ile inject edilir"
+type: Opaque
+stringData:
+  PGPASSWORD: "VAULT_INJECTED"
+  MINIO_ACCESS_KEY: "VAULT_INJECTED"
+  MINIO_SECRET_KEY: "VAULT_INJECTED"

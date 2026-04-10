@@ -1,0 +1,493 @@
+version: '3.9'
+
+# Yerel geliştirme ortamı
+# Production Kubernetes manifest'leri: infrastructure/kubernetes/ altında
+
+services:
+  # ── VERİTABANI ─────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: enkap_postgres
+    environment:
+      POSTGRES_USER: enkap_admin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-localdev_only}
+      POSTGRES_DB: enkap_control_plane
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infrastructure/docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U enkap_admin -d enkap_control_plane']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── ÖNBELLEK / OTURUM / PUB-SUB ────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: enkap_redis
+    command: redis-server --requirepass ${REDIS_PASSWORD:-localdev_only}
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ── PGBOUNCER (Bağlantı havuzu) ─────────────────────────────────────────────
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    container_name: enkap_pgbouncer
+    environment:
+      DATABASE_URL: postgres://enkap_admin:${POSTGRES_PASSWORD:-localdev_only}@postgres:5432/enkap_control_plane
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: 200
+      DEFAULT_POOL_SIZE: 20
+      AUTH_TYPE: trust
+    ports:
+      - '6432:5432'
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ── MESSAGE BROKER ──────────────────────────────────────────────────────────
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: enkap_rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: enkap
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-localdev_only}
+    ports:
+      - '5672:5672'   # AMQP
+      - '15672:15672' # Management UI → http://localhost:15672
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  # ── SERVİSLER ───────────────────────────────────────────────────────────────
+  auth-service:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/nestjs.Dockerfile
+      network: host
+      args:
+        SERVICE_NAME: auth-service
+    container_name: enkap_auth
+    environment:
+      PORT: 3001
+      DATABASE_URL: postgresql://enkap_admin:${POSTGRES_PASSWORD:-localdev_only}@postgres:5432/enkap_control_plane?sslmode=disable
+      REDIS_URL: redis://:${REDIS_PASSWORD:-localdev_only}@redis:6379
+      JWT_SECRET: ${JWT_SECRET:-enkap_local_jwt_k3y_2026_xF9mP2qL8nR5vT1w}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-enkap_local_refresh_k3y_2026_zK7hN3jM}
+      # Firebase Admin SDK — Production'da Vault Agent inject eder
+      # Geliştirmede: firebase-admin-service-account.json içeriğini base64'e çevirip set et
+      FIREBASE_SERVICE_ACCOUNT: ${FIREBASE_SERVICE_ACCOUNT:-}
+      # SMTP — E-posta gönderimi (boş bırakılırsa geliştirme modunda log'a düşer)
+      SMTP_HOST:   ${SMTP_HOST:-}
+      SMTP_PORT:   ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER:   ${SMTP_USER:-}
+      SMTP_PASS:   ${SMTP_PASS:-}
+      SMTP_FROM:   ${SMTP_FROM:-Enkap ERP <noreply@enkap.com.tr>}
+      FRONTEND_URL: ${FRONTEND_URL:-https://app.enkap.com.tr}
+    ports:
+      - '3001:3001'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  tenant-service:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/nestjs.Dockerfile
+      network: host
+      args:
+        SERVICE_NAME: tenant-service
+    container_name: enkap_tenant
+    environment:
+      PORT: 3002
+      DATABASE_URL: postgresql://enkap_admin:${POSTGRES_PASSWORD:-localdev_only}@postgres:5432/enkap_control_plane?sslmode=disable
+      # Tenant DataSource'ları için direkt postgres (PgBouncer search_path startup param desteklemiyor)
+      PGBOUNCER_ENDPOINT: postgresql://enkap_admin:${POSTGRES_PASSWORD:-localdev_only}@postgres:5432/enkap_control_plane?sslmode=disable
+      REDIS_URL: redis://:${REDIS_PASSWORD:-localdev_only}@redis:6379
+      RABBITMQ_URL: amqp://enkap:${RABBITMQ_PASSWORD:-localdev_only}@rabbitmq:5672
+      JWT_SECRET: ${JWT_SECRET:-enkap_local_jwt_k3y_2026_xF9mP2qL8nR5vT1w}
+      SMTP_HOST:    ${SMTP_HOST:-}
+      SMTP_PORT:    ${SMTP_PORT:-587}
+      SMTP_USER:    ${SMTP_USER:-}
+      SMTP_PASS:    ${SMTP_PASS:-}
+      SMTP_FROM:    ${SMTP_FROM:-Enkap ERP <noreply@enkap.com.tr>}
+      FRONTEND_URL: ${FRONTEND_URL:-https://app.enkap.com.tr}
+    ports:
+      - '3002:3002'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+
+  financial-service:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/nestjs.Dockerfile
+      network: host
+      args:
+        SERVICE_NAME: financial-service
+    container_name: enkap_financial
+    environment:
+      NODE_ENV: development
+      PORT: 3003
+      DATABASE_URL: postgresql://enkap_admin:${POSTGRES_PASSWORD:-localdev_only}@postgres:5432/enkap_control_plane?sslmode=disable
+      REDIS_URL: redis://:${REDIS_PASSWORD:-localdev_only}@redis:6379
+      JWT_SECRET: ${JWT_SECRET:-enkap_local_jwt_k3y_2026_xF9mP2qL8nR5vT1w}
+      GIB_USERNAME: ${GIB_USERNAME:-dev_gib_user}
+      GIB_PASSWORD: ${GIB_PASSWORD:-dev_gib_pass}
+      GIB_SIGNER_ENDPOINT: ${GIB_SIGNER_ENDPOINT:-http://localhost:8080/sign}
+    ports:
+      - '3003:3003'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  stock-service:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/nestjs.Dockerfile
+      network: host
+      args:
+        SERVICE_NAME: stock-service
+    container_name: enkap_stock
+    environment:
+      NODE_ENV: development
+      PORT: 3004
+      DATABASE_URL: postgresql://enkap_admin:${POSTGRES_PASSWORD:-localdev_only}@postgres:5432/enkap_control_plane?sslmode=disable
+      REDIS_URL: redis://:${REDIS_PASSWORD:-localdev_only}@redis:6379
+      JWT_SECRET: ${JWT_SECRET:-enkap_local_jwt_k3y_2026_xF9mP2qL8nR5vT1w}
+    ports:
+      - '3004:3004'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  ml-inference:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/python.Dockerfile
+      network: host
+    container_name: enkap_ml
+    environment:
+      REDIS_URL: redis://:${REDIS_PASSWORD:-localdev_only}@redis:6379
+    ports:
+      - '3005:3005'
+    depends_on:
+      - redis
+
+  hr-service:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/nestjs.Dockerfile
+      network: host
+      args:
+        SERVICE_NAME: hr-service
+    container_name: enkap_hr
+    environment:
+      NODE_ENV: development
+      PORT: 3007
+      DATABASE_URL: postgresql://enkap_admin:${POSTGRES_PASSWORD:-localdev_only}@postgres:5432/enkap_control_plane?sslmode=disable
+      REDIS_URL: redis://:${REDIS_PASSWORD:-localdev_only}@redis:6379
+      JWT_SECRET: ${JWT_SECRET:-enkap_local_jwt_k3y_2026_xF9mP2qL8nR5vT1w}
+      FLEET_SERVICE_URL: http://fleet-service:3017
+      FLEET_API_KEY: ${FLEET_API_KEY:-fleet_local_api_key_2026}
+    ports:
+      - '3007:3007'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  billing-service:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/nestjs.Dockerfile
+      network: host
+      args:
+        SERVICE_NAME: billing-service
+    container_name: enkap_billing
+    environment:
+      PORT: 3008
+      DATABASE_URL: postgresql://enkap_admin:${POSTGRES_PASSWORD:-localdev_only}@postgres:5432/enkap_control_plane?sslmode=disable
+      JWT_SECRET:        ${JWT_SECRET:-enkap_local_jwt_k3y_2026_xF9mP2qL8nR5vT1w}
+      IYZICO_API_KEY:    ${IYZICO_API_KEY:-sandbox-api-key}
+      IYZICO_SECRET_KEY: ${IYZICO_SECRET_KEY:-sandbox-secret-key}
+      IYZICO_BASE_URL:   ${IYZICO_BASE_URL:-https://sandbox-api.iyzipay.com}
+      RABBITMQ_URL:      amqp://enkap:${RABBITMQ_PASSWORD:-localdev_only}@rabbitmq:5672
+      REDIS_URL:         redis://:${REDIS_PASSWORD:-localdev_only}@redis:6379
+    ports:
+      - '3008:3008'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+
+  crm-service:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/nestjs.Dockerfile
+      network: host
+      args:
+        SERVICE_NAME: crm-service
+    container_name: enkap_crm
+    environment:
+      PORT: 3009
+      DATABASE_URL: postgresql://enkap_admin:${POSTGRES_PASSWORD:-localdev_only}@postgres:5432/enkap_control_plane?sslmode=disable
+      REDIS_URL: redis://:${REDIS_PASSWORD:-localdev_only}@redis:6379
+      JWT_SECRET: ${JWT_SECRET:-enkap_local_jwt_k3y_2026_xF9mP2qL8nR5vT1w}
+    ports:
+      - '3009:3009'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      pgbouncer:
+        condition: service_started
+
+  analytics-service:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/nestjs.Dockerfile
+      network: host
+      args:
+        SERVICE_NAME: analytics-service
+    container_name: enkap_analytics
+    environment:
+      PORT: 3010
+      DATABASE_URL: postgresql://enkap_admin:${POSTGRES_PASSWORD:-localdev_only}@postgres:5432/enkap_control_plane?sslmode=disable
+      REDIS_URL: redis://:${REDIS_PASSWORD:-localdev_only}@redis:6379
+      JWT_SECRET: ${JWT_SECRET:-enkap_local_jwt_k3y_2026_xF9mP2qL8nR5vT1w}
+    ports:
+      - '3010:3010'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      pgbouncer:
+        condition: service_started
+
+  purchase-service:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/nestjs.Dockerfile
+      network: host
+      args:
+        SERVICE_NAME: purchase-service
+    container_name: enkap_purchase
+    environment:
+      PORT: 3011
+      DATABASE_URL: postgresql://enkap_admin:${POSTGRES_PASSWORD:-localdev_only}@postgres:5432/enkap_control_plane?sslmode=disable
+      REDIS_URL: redis://:${REDIS_PASSWORD:-localdev_only}@redis:6379
+      JWT_SECRET: ${JWT_SECRET:-enkap_local_jwt_k3y_2026_xF9mP2qL8nR5vT1w}
+      STOCK_SERVICE_URL: http://stock-service:3004
+    ports:
+      - '3011:3011'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      stock-service:
+        condition: service_started
+
+  treasury-service:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/nestjs.Dockerfile
+      network: host
+      args:
+        SERVICE_NAME: treasury-service
+    container_name: enkap_treasury
+    environment:
+      PORT: 3013
+      DATABASE_URL: postgresql://enkap_admin:${POSTGRES_PASSWORD:-localdev_only}@postgres:5432/enkap_control_plane?sslmode=disable
+      REDIS_URL: redis://:${REDIS_PASSWORD:-localdev_only}@redis:6379
+      JWT_SECRET: ${JWT_SECRET:-enkap_local_jwt_k3y_2026_xF9mP2qL8nR5vT1w}
+    ports:
+      - '3013:3013'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      pgbouncer:
+        condition: service_started
+
+  order-service:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/nestjs.Dockerfile
+      network: host
+      args:
+        SERVICE_NAME: order-service
+    container_name: enkap_order
+    environment:
+      PORT: 3012
+      DATABASE_URL: postgresql://enkap_admin:${POSTGRES_PASSWORD:-localdev_only}@postgres:5432/enkap_control_plane?sslmode=disable
+      REDIS_URL: redis://:${REDIS_PASSWORD:-localdev_only}@redis:6379
+      JWT_SECRET: ${JWT_SECRET:-enkap_local_jwt_k3y_2026_xF9mP2qL8nR5vT1w}
+      STOCK_SERVICE_URL: http://stock-service:3004
+      FINANCIAL_SERVICE_URL: http://financial-service:3003
+      FLEET_SERVICE_URL: http://fleet-service:3017
+    ports:
+      - '3012:3012'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      stock-service:
+        condition: service_started
+      financial-service:
+        condition: service_started
+
+  manufacturing-service:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/nestjs.Dockerfile
+      network: host
+      args:
+        SERVICE_NAME: manufacturing-service
+    container_name: enkap_manufacturing
+    environment:
+      NODE_ENV: development
+      PORT: 3014
+      DATABASE_URL: postgresql://enkap_admin:${POSTGRES_PASSWORD:-localdev_only}@postgres:5432/enkap_control_plane?sslmode=disable
+      REDIS_URL: redis://:${REDIS_PASSWORD:-localdev_only}@redis:6379
+      JWT_SECRET: ${JWT_SECRET:-enkap_local_jwt_k3y_2026_xF9mP2qL8nR5vT1w}
+      STOCK_SERVICE_URL: http://stock-service:3004
+    ports:
+      - '3014:3014'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      stock-service:
+        condition: service_started
+
+  fleet-service:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/nestjs.Dockerfile
+      network: host
+      args:
+        SERVICE_NAME: fleet-service
+    container_name: enkap_fleet
+    environment:
+      PORT: 3017
+      DATABASE_URL: postgresql://enkap_admin:${POSTGRES_PASSWORD:-localdev_only}@postgres:5432/enkap_control_plane?sslmode=disable
+      REDIS_URL: redis://:${REDIS_PASSWORD:-localdev_only}@redis:6379
+      JWT_SECRET: ${JWT_SECRET:-enkap_local_jwt_k3y_2026_xF9mP2qL8nR5vT1w}
+      FLEET_API_KEY: ${FLEET_API_KEY:-fleet_local_api_key_2026}
+      FINANCIAL_SERVICE_URL: http://financial-service:3003
+    ports:
+      - '3017:3017'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  waybill-service:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/nestjs.Dockerfile
+      network: host
+      args:
+        SERVICE_NAME: waybill-service
+    container_name: enkap_waybill
+    environment:
+      PORT: 3018
+      DATABASE_URL: postgresql://enkap_admin:${POSTGRES_PASSWORD:-localdev_only}@postgres:5432/enkap_control_plane?sslmode=disable
+      CONTROL_PLANE_DATABASE_URL: postgresql://enkap_admin:${POSTGRES_PASSWORD:-localdev_only}@postgres:5432/enkap_control_plane?sslmode=disable
+      REDIS_URL: redis://:${REDIS_PASSWORD:-localdev_only}@redis:6379
+      JWT_SECRET: ${JWT_SECRET:-enkap_local_jwt_k3y_2026_xF9mP2qL8nR5vT1w}
+      RABBITMQ_URL: amqp://enkap:${RABBITMQ_PASSWORD:-localdev_only}@rabbitmq:5672
+      # GIB_API_URL boş bırakılırsa mock GİB kullanılır
+      # GIB_API_URL: https://earsivportaltest.efatura.gov.tr/...
+    ports:
+      - '3018:3018'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+
+  notification-service:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/nestjs.Dockerfile
+      network: host
+      args:
+        SERVICE_NAME: notification-service
+    container_name: enkap_notification
+    environment:
+      PORT: 3019
+      DATABASE_URL: postgresql://enkap_admin:${POSTGRES_PASSWORD:-localdev_only}@postgres:5432/enkap_control_plane?sslmode=disable
+      CONTROL_PLANE_DATABASE_URL: postgresql://enkap_admin:${POSTGRES_PASSWORD:-localdev_only}@postgres:5432/enkap_control_plane?sslmode=disable
+      REDIS_URL: redis://:${REDIS_PASSWORD:-localdev_only}@redis:6379
+      JWT_SECRET: ${JWT_SECRET:-enkap_local_jwt_k3y_2026_xF9mP2qL8nR5vT1w}
+      RABBITMQ_URL: amqp://enkap:${RABBITMQ_PASSWORD:-localdev_only}@rabbitmq:5672
+    ports:
+      - '3019:3019'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+
+  webhook-hub:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/nestjs.Dockerfile
+      network: host
+      args:
+        SERVICE_NAME: webhook-hub
+    container_name: enkap_webhook
+    environment:
+      PORT: 3006
+      DATABASE_URL: postgresql://enkap_admin:${POSTGRES_PASSWORD:-localdev_only}@postgres:5432/enkap_control_plane?sslmode=disable
+    ports:
+      - '3006:3006'
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:

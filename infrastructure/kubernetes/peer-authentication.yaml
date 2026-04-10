@@ -1,0 +1,9 @@
+# Istio strict mTLS — namespace genelinde tüm pod'lar arası iletişim şifreli
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: enkap-production
+spec:
+  mtls:
+    mode: STRICT   # PERMISSIVE asla — production'da gevşek mod kabul edilmez

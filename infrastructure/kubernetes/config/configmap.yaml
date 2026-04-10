@@ -1,0 +1,57 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: enkap-config
+  namespace: enkap-production
+data:
+  # ─── Veritabanı ────────────────────────────────────────────────────────────
+  # PgBouncer üzerinden bağlanılır (direkt PostgreSQL değil)
+  DB_HOST: "pgbouncer.enkap-production.svc.cluster.local"
+  DB_PORT: "6432"
+  DB_NAME: "enkap_control"
+
+  # ─── Redis ─────────────────────────────────────────────────────────────────
+  REDIS_HOST: "redis.enkap-production.svc.cluster.local"
+  REDIS_PORT: "6379"
+
+  # ─── RabbitMQ ──────────────────────────────────────────────────────────────
+  RABBITMQ_HOST: "rabbitmq.enkap-production.svc.cluster.local"
+  RABBITMQ_PORT: "5672"
+  RABBITMQ_VHOST: "/"
+
+  # ─── Servis Adresleri (cluster-internal) ───────────────────────────────────
+  AUTH_SERVICE_URL:      "http://auth-service.enkap-production.svc.cluster.local:3001"
+  TENANT_SERVICE_URL:    "http://tenant-service.enkap-production.svc.cluster.local:3002"
+  FINANCIAL_SERVICE_URL: "http://financial-service.enkap-production.svc.cluster.local:3003"
+  STOCK_SERVICE_URL:     "http://stock-service.enkap-production.svc.cluster.local:3004"
+  ML_SERVICE_URL:        "http://ml-inference.enkap-production.svc.cluster.local:3005"
+  HR_SERVICE_URL:        "http://hr-service.enkap-production.svc.cluster.local:3007"
+  BILLING_SERVICE_URL:   "http://billing-service.enkap-production.svc.cluster.local:3008"
+  CRM_SERVICE_URL:       "http://crm-service.enkap-production.svc.cluster.local:3009"
+  ANALYTICS_SERVICE_URL: "http://analytics-service.enkap-production.svc.cluster.local:3010"
+
+  # ─── GİB / ML ──────────────────────────────────────────────────────────────
+  GIB_SIGNER_ENDPOINT: "http://gib-signer.enkap-production.svc.cluster.local:8080"
+  MLFLOW_TRACKING_URI: "http://mlflow.enkap-production.svc.cluster.local:5000"
+  FEAST_ENDPOINT: "http://feast-server.enkap-production.svc.cluster.local:6566"
+  FEAST_USE_STUB: "false"
+  MLFLOW_USE_STUB: "false"
+
+  # ─── Uygulama ──────────────────────────────────────────────────────────────
+  NODE_ENV: "production"
+  TZ: "Europe/Istanbul"
+  LOG_LEVEL: "info"
+  JWT_ALGORITHM: "RS256"
+
+  # ─── E-posta (SMTP) ────────────────────────────────────────────────────────
+  # Hassas değerler (SMTP_USER, SMTP_PASS) Vault üzerinden External Secrets ile inject edilir.
+  SMTP_HOST:    "smtp.sendgrid.net"
+  SMTP_PORT:    "587"
+  SMTP_SECURE:  "false"
+  SMTP_FROM:    "Enkap ERP <noreply@enkap.com.tr>"
+  FRONTEND_URL: "https://app.enkap.com.tr"
+
+  # ─── Vault ─────────────────────────────────────────────────────────────────
+  VAULT_ADDR: "http://vault.vault.svc.cluster.local:8200"
+  VAULT_AUTH_METHOD: "kubernetes"
+  VAULT_ROLE: "enkap-services"

@@ -1,0 +1,136 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ml-inference
+  namespace: enkap-production
+  labels:
+    app: ml-inference
+    version: v1
+spec:
+  # ML servisi CPU yoğun — başlangıçta 1 replica, HPA ile ölçeklenir
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ml-inference
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: ml-inference
+        version: v1
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "enkap-services"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3005"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: enkap-sa
+      terminationGracePeriodSeconds: 60  # Uzun inference tamamlansın
+      containers:
+        - name: ml-inference
+          image: ghcr.io/enkap/ml-inference:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3005
+              name: http
+          envFrom:
+            - configMapRef:
+                name: enkap-config
+            - secretRef:
+                name: enkap-app-secrets
+          env:
+            - name: PORT
+              value: "3005"
+            - name: WORKERS
+              value: "4"             # Uvicorn worker sayısı
+            - name: FEAST_USE_STUB
+              value: "false"
+            - name: MLFLOW_USE_STUB
+              value: "false"
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2000m"           # XGBoost/Prophet için yüksek CPU limiti
+              memory: "3Gi"          # Model yükleme için yüksek bellek
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3005
+            initialDelaySeconds: 30  # Model yükleme için daha uzun bekleme
+            periodSeconds: 30
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 3005
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          # Model dosyaları için geçici depolama
+          volumeMounts:
+            - name: model-cache
+              mountPath: /tmp/models
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            readOnlyRootFilesystem: false  # Model cache'i için yazma gerekli
+            allowPrivilegeEscalation: false
+      volumes:
+        - name: model-cache
+          emptyDir:
+            medium: Memory   # RAM'da önbellekleme (hızlı model erişimi)
+            sizeLimit: "1Gi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ml-inference
+  namespace: enkap-production
+spec:
+  type: ClusterIP
+  selector:
+    app: ml-inference
+  ports:
+    - port: 3005
+      targetPort: 3005
+      name: http
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: ml-inference-hpa
+  namespace: enkap-production
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ml-inference
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 75
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 85
+  # Ölçek küçültme gecikmesi — model yükleme maliyeti nedeniyle konservatif
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300  # 5 dakika bekle, sonra küçült
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120

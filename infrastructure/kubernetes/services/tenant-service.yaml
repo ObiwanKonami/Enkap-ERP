@@ -1,0 +1,113 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tenant-service
+  namespace: enkap-production
+  labels:
+    app: tenant-service
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: tenant-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: tenant-service
+        version: v1
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "enkap-services"
+        vault.hashicorp.com/agent-inject-secret-db: "enkap/production/database"
+        vault.hashicorp.com/agent-inject-template-db: |
+          {{- with secret "enkap/production/database" -}}
+          export DB_PASSWORD="{{ .Data.data.password }}"
+          {{- end }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3002"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: enkap-sa
+      terminationGracePeriodSeconds: 60   # Provizyon saga için daha uzun grace
+      containers:
+        - name: tenant-service
+          image: ghcr.io/enkap/tenant-service:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3002
+              name: http
+          envFrom:
+            - configMapRef:
+                name: enkap-config
+            - secretRef:
+                name: enkap-db-secrets
+            - secretRef:
+                name: enkap-app-secrets
+          env:
+            - name: PORT
+              value: "3002"
+          resources:
+            requests:
+              cpu: "150m"
+              memory: "384Mi"
+            limits:
+              cpu: "750m"
+              memory: "768Mi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3002
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 3002
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tenant-service
+  namespace: enkap-production
+spec:
+  type: ClusterIP
+  selector:
+    app: tenant-service
+  ports:
+    - port: 3002
+      targetPort: 3002
+      name: http
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: tenant-service-hpa
+  namespace: enkap-production
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: tenant-service
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

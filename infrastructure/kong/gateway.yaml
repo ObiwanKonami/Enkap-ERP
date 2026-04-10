@@ -1,0 +1,98 @@
+# Kong API Gateway — Enkap ERP
+#
+# Kong, tüm dış trafiği alan tek giriş noktasıdır.
+# İç servisler birbirleriyle Istio mTLS üzerinden konuşur (Kong bypass etmez).
+#
+# Mimari:
+#   İnternet → Kong Ingress → NestJS Servisler
+#                           → FastAPI ML Servisi
+#
+# Kurulum:
+#   helm install kong kong/ingress -n kong \
+#     --set controller.ingressClass=kong \
+#     --set proxy.type=LoadBalancer
+---
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: kong
+  annotations:
+    ingressclass.kubernetes.io/is-default-class: "true"
+spec:
+  controller: ingress-controllers.konghq.com/kong
+---
+# Rate limiting plugin — DDoS koruması
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: rate-limit-global
+  namespace: enkap-production
+plugin: rate-limiting
+config:
+  second: 20          # İstek / saniye (IP başına)
+  minute: 500
+  hour: 10000
+  policy: redis
+  redis_host: redis.enkap-production.svc.cluster.local
+  redis_port: 6379
+  fault_tolerant: true  # Redis düşerse rate limit devreye girmesin
+---
+# CORS plugin
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: cors-policy
+  namespace: enkap-production
+plugin: cors
+config:
+  origins:
+    - "https://app.enkap.com.tr"
+    - "https://staging.enkap.com.tr"
+  methods:
+    - GET
+    - POST
+    - PUT
+    - PATCH
+    - DELETE
+    - OPTIONS
+  headers:
+    - Authorization
+    - Content-Type
+    - X-Tenant-ID
+    - X-Request-ID
+  exposed_headers:
+    - X-Request-ID
+  credentials: true
+  max_age: 3600
+---
+# Request ID enjeksiyonu — her isteğe benzersiz ID atar (tracing için)
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: request-id
+  namespace: enkap-production
+plugin: correlation-id
+config:
+  header_name: X-Request-ID
+  generator: uuid#counter
+  echo_downstream: true
+---
+# Response transformer — güvenlik başlıkları ekle
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: security-headers
+  namespace: enkap-production
+plugin: response-transformer
+config:
+  add:
+    headers:
+      - "X-Content-Type-Options: nosniff"
+      - "X-Frame-Options: DENY"
+      - "X-XSS-Protection: 1; mode=block"
+      - "Strict-Transport-Security: max-age=31536000; includeSubDomains"
+      - "Referrer-Policy: strict-origin-when-cross-origin"
+  remove:
+    headers:
+      - "X-Powered-By"
+      - "Server"

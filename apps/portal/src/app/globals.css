@@ -1,0 +1,288 @@
+/* ─── Design Tokens — Portal (Light Theme) ─────────────────────────────── */
+:root {
+  --bg:        #F9FAFB;
+  --surface:   #FFFFFF;
+  --surface-2: #F3F4F6;
+  --border:    #E5E7EB;
+  --border-2:  #D1D5DB;
+  --text-1:    #111827;
+  --text-2:    #374151;
+  --text-3:    #9CA3AF;
+  --accent:    #2563EB;
+  --accent-bg: rgba(37, 99, 235, 0.08);
+  --accent-border: rgba(37, 99, 235, 0.2);
+  --success:   #059669;
+  --success-bg: rgba(5, 150, 105, 0.08);
+  --success-border: rgba(5, 150, 105, 0.2);
+  --warning:   #D97706;
+  --warning-bg: rgba(217, 119, 6, 0.08);
+  --warning-border: rgba(217, 119, 6, 0.2);
+  --danger:    #DC2626;
+  --danger-bg: rgba(220, 38, 38, 0.08);
+  --danger-border: rgba(220, 38, 38, 0.2);
+  --sidebar-width: 220px;
+  --header-height: 56px;
+  --radius: 8px;
+}
+
+/* ─── Base Reset ────────────────────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  background-color: var(--bg);
+  color: var(--text-1);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  min-height: 100vh;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #9CA3AF; }
+
+/* Selection */
+::selection { background: rgba(37, 99, 235, 0.15); }
+
+/* ─── Utility Classes ────────────────────────────────────────────────────── */
+
+/* Card */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: 6px;
+  font-size: 13.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  border: none;
+  text-decoration: none;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: #ffffff;
+}
+.btn-primary:hover { background: #1D4ED8; }
+.btn-primary:active { transform: scale(0.98); }
+
+.btn-outline {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent-border);
+}
+.btn-outline:hover { background: var(--accent-bg); }
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-2);
+  border: 1px solid var(--border);
+}
+.btn-ghost:hover { background: var(--surface-2); color: var(--text-1); }
+
+.btn-sm {
+  padding: 5px 10px;
+  font-size: 12.5px;
+  gap: 4px;
+}
+
+/* Badges */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid transparent;
+}
+
+.badge-success {
+  background: var(--success-bg);
+  color: var(--success);
+  border-color: var(--success-border);
+}
+
+.badge-warning {
+  background: var(--warning-bg);
+  color: var(--warning);
+  border-color: var(--warning-border);
+}
+
+.badge-danger {
+  background: var(--danger-bg);
+  color: var(--danger);
+  border-color: var(--danger-border);
+}
+
+.badge-info {
+  background: var(--accent-bg);
+  color: var(--accent);
+  border-color: var(--accent-border);
+}
+
+.badge-neutral {
+  background: var(--surface-2);
+  color: var(--text-2);
+  border-color: var(--border);
+}
+
+/* Table */
+.table-wrapper {
+  overflow-x: auto;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+
+table.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+
+table.data-table thead {
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+
+table.data-table thead th {
+  padding: 10px 16px;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+table.data-table tbody tr {
+  border-bottom: 1px solid var(--border);
+  transition: background 0.1s;
+}
+
+table.data-table tbody tr:last-child {
+  border-bottom: none;
+}
+
+table.data-table tbody tr:hover {
+  background: var(--surface-2);
+}
+
+table.data-table tbody td {
+  padding: 12px 16px;
+  color: var(--text-1);
+  vertical-align: middle;
+}
+
+/* Mono numbers */
+.num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+  letter-spacing: -0.01em;
+}
+
+/* Nav item */
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13.5px;
+  color: var(--text-2);
+  text-decoration: none;
+  transition: all 0.1s;
+  cursor: pointer;
+}
+
+.nav-item:hover {
+  background: var(--surface-2);
+  color: var(--text-1);
+}
+
+.nav-item-active {
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-weight: 500;
+}
+
+/* Skeleton */
+.skeleton {
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--border) 50%, var(--surface-2) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.6s linear infinite;
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Section label */
+.section-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* Input */
+.input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13.5px;
+  color: var(--text-1);
+  background: var(--surface);
+  outline: none;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+
+.input::placeholder { color: var(--text-3); }
+
+.input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-bg);
+}
+
+/* Empty state */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  color: var(--text-3);
+  gap: 8px;
+}
+
+.empty-state p {
+  font-size: 13.5px;
+}

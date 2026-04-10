@@ -1,0 +1,117 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crm-service
+  namespace: enkap-production
+  labels:
+    app: crm-service
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: crm-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: crm-service
+        version: v1
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "enkap-services"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3009"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: enkap-sa
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: crm-service
+          image: ghcr.io/enkap/crm-service:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3009
+              name: http
+          envFrom:
+            - configMapRef:
+                name: enkap-config
+            - secretRef:
+                name: enkap-db-secrets
+            - secretRef:
+                name: enkap-app-secrets
+          env:
+            - name: PORT
+              value: "3009"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3009
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 3009
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: crm-service
+  namespace: enkap-production
+  labels:
+    app: crm-service
+spec:
+  type: ClusterIP
+  selector:
+    app: crm-service
+  ports:
+    - port: 3009
+      targetPort: 3009
+      name: http
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: crm-service-hpa
+  namespace: enkap-production
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: crm-service
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80

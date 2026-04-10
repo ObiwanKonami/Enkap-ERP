@@ -1,0 +1,156 @@
+# Grafana Dashboard — Enkap ERP Platform
+#
+# Grafana Operator veya Grafana Sidecar (kube-prometheus-stack ile) tarafından
+# otomatik yüklenir. Label: grafana_dashboard: "1"
+#
+# Panel yapısı:
+#   Satır 1: Platform Genel Bakış (RPS, Hata Oranı, P99 Gecikme, In-Flight)
+#   Satır 2: Servis Bazında RPS (heatmap)
+#   Satır 3: Gecikme Dağılımı (P50/P90/P99 per service)
+#   Satır 4: Node.js Heap Kullanımı (per service)
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: enkap-grafana-dashboard
+  namespace: enkap-production
+  labels:
+    grafana_dashboard: "1"
+    app.kubernetes.io/part-of: enkap-erp
+data:
+  enkap-dashboard.json: |
+    {
+      "title": "Enkap ERP Platform",
+      "uid": "enkap-platform-v1",
+      "tags": ["enkap", "erp", "production"],
+      "refresh": "30s",
+      "time": { "from": "now-1h", "to": "now" },
+      "panels": [
+        {
+          "id": 1,
+          "title": "Toplam RPS (İstekler/Saniye)",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+          "targets": [{
+            "expr": "sum(rate(http_requests_total{service=~\"enkap-.*\"}[1m]))",
+            "legendFormat": "RPS"
+          }],
+          "options": {
+            "colorMode": "background",
+            "thresholds": {
+              "steps": [
+                { "color": "green", "value": null },
+                { "color": "yellow", "value": 100 },
+                { "color": "red", "value": 500 }
+              ]
+            }
+          }
+        },
+        {
+          "id": 2,
+          "title": "5xx Hata Oranı",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+          "targets": [{
+            "expr": "sum(rate(http_requests_total{status_code=~\"5..\",service=~\"enkap-.*\"}[5m])) / sum(rate(http_requests_total{service=~\"enkap-.*\"}[5m])) * 100",
+            "legendFormat": "Hata Oranı %"
+          }],
+          "options": {
+            "unit": "percent",
+            "colorMode": "background",
+            "thresholds": {
+              "steps": [
+                { "color": "green", "value": null },
+                { "color": "yellow", "value": 1 },
+                { "color": "red", "value": 5 }
+              ]
+            }
+          }
+        },
+        {
+          "id": 3,
+          "title": "P99 Gecikme (tüm servisler)",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+          "targets": [{
+            "expr": "histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{service=~\"enkap-.*\"}[5m])))",
+            "legendFormat": "P99"
+          }],
+          "options": {
+            "unit": "s",
+            "colorMode": "background",
+            "thresholds": {
+              "steps": [
+                { "color": "green", "value": null },
+                { "color": "yellow", "value": 0.5 },
+                { "color": "red", "value": 2 }
+              ]
+            }
+          }
+        },
+        {
+          "id": 4,
+          "title": "Anlık Aktif İstekler",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+          "targets": [{
+            "expr": "sum(http_requests_in_flight{service=~\"enkap-.*\"})",
+            "legendFormat": "In-Flight"
+          }]
+        },
+        {
+          "id": 5,
+          "title": "Servis Bazında RPS",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 4 },
+          "targets": [{
+            "expr": "sum by (service) (rate(http_requests_total{service=~\"enkap-.*\"}[1m]))",
+            "legendFormat": "{{ service }}"
+          }],
+          "options": { "tooltip": { "mode": "multi" } }
+        },
+        {
+          "id": 6,
+          "title": "Gecikme P50 / P90 / P99 (servis bazında)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, sum by (service, le) (rate(http_request_duration_seconds_bucket{service=~\"enkap-.*\"}[5m])))",
+              "legendFormat": "P50 {{ service }}"
+            },
+            {
+              "expr": "histogram_quantile(0.90, sum by (service, le) (rate(http_request_duration_seconds_bucket{service=~\"enkap-.*\"}[5m])))",
+              "legendFormat": "P90 {{ service }}"
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum by (service, le) (rate(http_request_duration_seconds_bucket{service=~\"enkap-.*\"}[5m])))",
+              "legendFormat": "P99 {{ service }}"
+            }
+          ],
+          "options": { "unit": "s" }
+        },
+        {
+          "id": 7,
+          "title": "Node.js Heap Kullanımı",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+          "targets": [{
+            "expr": "nodejs_heap_used_bytes{service=~\"enkap-.*\"} / 1024 / 1024",
+            "legendFormat": "{{ service }} (MB)"
+          }],
+          "options": { "unit": "megabytes" }
+        },
+        {
+          "id": 8,
+          "title": "En Yavaş Rotalar (P99 > 500ms)",
+          "type": "table",
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 20 },
+          "targets": [{
+            "expr": "topk(20, histogram_quantile(0.99, sum by (service, route, le) (rate(http_request_duration_seconds_bucket{service=~\"enkap-.*\"}[5m]))) > 0.5)",
+            "legendFormat": "{{ service }} {{ route }}",
+            "instant": true
+          }]
+        }
+      ]
+    }

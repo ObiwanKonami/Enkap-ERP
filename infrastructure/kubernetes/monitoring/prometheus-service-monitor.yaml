@@ -1,0 +1,115 @@
+# Prometheus Operator — ServiceMonitor
+#
+# Prometheus'un Enkap servislerini scrape etmesi için konfigürasyon.
+# Gereksinim: kube-prometheus-stack veya prometheus-operator kurulu olmalı.
+#
+# Uygulama: kubectl apply -f prometheus-service-monitor.yaml
+#
+# Scrape aralığı: 15 saniye (üretim için yeterli granülarite)
+# /metrics endpoint'i: her serviste PrometheusController tarafından sağlanır
+#
+# Güvenlik notu: /metrics endpoint'i sadece cluster-internal erişime açık.
+# Kong Gateway'de bu path public route'lardan hariç tutulmuştur.
+
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: enkap-services
+  namespace: enkap-production
+  labels:
+    app.kubernetes.io/part-of: enkap-erp
+    # Prometheus Operator bu label'ı kullanarak ServiceMonitor'ı seçer
+    release: kube-prometheus-stack
+spec:
+  namespaceSelector:
+    matchNames:
+      - enkap-production
+  selector:
+    matchLabels:
+      app.kubernetes.io/part-of: enkap-erp
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s
+      # Authorization header eklenmez — /metrics cluster-internal'dır
+      honorLabels: true
+
+---
+# Her servis için Service nesnelerinin Prometheus tarafından scrape edilmesi
+# için ortak label eklenir. Mevcut Deployment YAML'larına bu label eklenmelidir.
+#
+# Örnek (auth-service Service'ine eklenecek label):
+#   metadata:
+#     labels:
+#       app.kubernetes.io/part-of: enkap-erp
+
+# Prometheus Operator'un hangi namespace'leri izleyeceği
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: enkap-alerts
+  namespace: enkap-production
+  labels:
+    app.kubernetes.io/part-of: enkap-erp
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: enkap.http
+      interval: 30s
+      rules:
+        # P99 gecikme uyarısı (500ms üzerindeyse)
+        - alert: EnkapHighLatencyP99
+          expr: |
+            histogram_quantile(0.99,
+              sum by (service, le) (
+                rate(http_request_duration_seconds_bucket{service=~"enkap-.*"}[5m])
+              )
+            ) > 0.5
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.service }} P99 gecikme 500ms üzerinde"
+            description: "Son 5 dakikada P99 = {{ $value | humanizeDuration }}"
+
+        # Yüksek hata oranı uyarısı (%5 üzerindeyse)
+        - alert: EnkapHighErrorRate
+          expr: |
+            sum by (service) (
+              rate(http_requests_total{status_code=~"5..",service=~"enkap-.*"}[5m])
+            )
+            /
+            sum by (service) (
+              rate(http_requests_total{service=~"enkap-.*"}[5m])
+            ) > 0.05
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "{{ $labels.service }} hata oranı %5 üzerinde"
+            description: "Hata oranı: {{ $value | humanizePercentage }}"
+
+        # Pod restart uyarısı
+        - alert: EnkapPodRestartLoop
+          expr: |
+            increase(kube_pod_container_status_restarts_total{
+              namespace="enkap-production"
+            }[15m]) > 3
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "{{ $labels.pod }} yeniden başlatma döngüsünde"
+            description: "Son 15 dakikada {{ $value }} kez yeniden başlatıldı"
+
+        # Bellek basıncı
+        - alert: EnkapHighMemoryUsage
+          expr: |
+            nodejs_heap_used_bytes{service=~"enkap-.*"} /
+            nodejs_heap_size_total_bytes{service=~"enkap-.*"} > 0.85
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.service }} heap kullanımı %85 üzerinde"

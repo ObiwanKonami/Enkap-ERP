@@ -1,0 +1,45 @@
+"use strict";
+var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
+    var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
+    if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
+    else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
+    return c > 3 && r && Object.defineProperty(target, key, r), r;
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.AuditModule = void 0;
+const common_1 = require("@nestjs/common");
+const core_1 = require("@nestjs/core");
+const audit_interceptor_1 = require("./audit.interceptor");
+const tenant_datasource_manager_1 = require("../tenant/tenant-datasource.manager");
+/**
+ * KVKK Denetim İzi Modülü.
+ *
+ * AppModule'e import edildiğinde AuditInterceptor tüm
+ * @Auditable() dekoratörlü endpoint'leri otomatik yakalar.
+ *
+ * @Global() — bir kez import yeterli.
+ *
+ * Kullanım (AppModule'de):
+ *   @Module({ imports: [AuditModule] })
+ *
+ * Controller'da:
+ *   @Get(':id')
+ *   @Auditable({ action: 'READ', resource: 'employee.tckn' })
+ *   findOne(...) {}
+ */
+let AuditModule = class AuditModule {
+};
+exports.AuditModule = AuditModule;
+exports.AuditModule = AuditModule = __decorate([
+    (0, common_1.Global)(),
+    (0, common_1.Module)({
+        providers: [
+            tenant_datasource_manager_1.TenantDataSourceManager,
+            {
+                provide: core_1.APP_INTERCEPTOR,
+                useClass: audit_interceptor_1.AuditInterceptor,
+            },
+        ],
+        exports: [],
+    })
+], AuditModule);

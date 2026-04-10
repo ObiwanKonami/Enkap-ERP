@@ -1,0 +1,169 @@
+name: Mobile — EAS Build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/mobile/**'
+      - 'packages/shared-types/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'apps/mobile/**'
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: 'Platform'
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - ios
+          - android
+      profile:
+        description: 'EAS Build Profili'
+        required: true
+        type: choice
+        default: preview
+        options:
+          - preview      # Internal distribution (TestFlight / Internal Track)
+          - production   # Store submission
+
+concurrency:
+  group: mobile-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '20'
+  PNPM_VERSION: '9'
+
+jobs:
+  typecheck-mobile:
+    name: Mobile Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Shared Types Build
+        run: pnpm --filter @enkap/shared-types build
+
+      - name: Mobile Typecheck
+        run: pnpm --filter @enkap/mobile typecheck
+
+  eas-build:
+    name: EAS Build — ${{ inputs.platform || 'all' }} (${{ inputs.profile || 'preview' }})
+    runs-on: ubuntu-latest
+    needs: [typecheck-mobile]
+    # PR'larda sadece typecheck — EAS build sadece main push veya manual
+    if: github.event_name != 'pull_request'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Expo Token Doğrula
+        run: npx expo whoami
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+      # app.json'da API URL'lerini production ortamına göre güncelle
+      - name: Ortam Değişkenlerini Ayarla
+        run: |
+          cd apps/mobile
+          cat > .env.production << EOF
+          EXPO_PUBLIC_API_URL=https://api.enkap.com.tr
+          EXPO_PUBLIC_ENV=production
+          EOF
+
+      - name: EAS Build (iOS)
+        if: inputs.platform == 'ios' || inputs.platform == 'all' || inputs.platform == ''
+        working-directory: apps/mobile
+        run: |
+          npx eas-cli build \
+            --platform ios \
+            --profile ${{ inputs.profile || 'preview' }} \
+            --non-interactive \
+            --no-wait
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+      - name: EAS Build (Android)
+        if: inputs.platform == 'android' || inputs.platform == 'all' || inputs.platform == ''
+        working-directory: apps/mobile
+        run: |
+          npx eas-cli build \
+            --platform android \
+            --profile ${{ inputs.profile || 'preview' }} \
+            --non-interactive \
+            --no-wait
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+  eas-submit:
+    name: EAS Submit (Store)
+    runs-on: ubuntu-latest
+    needs: [eas-build]
+    # Sadece production profile ile manuel tetiklemede store'a gönder
+    if: |
+      github.event_name == 'workflow_dispatch' &&
+      inputs.profile == 'production' &&
+      github.ref == 'refs/heads/main'
+    environment:
+      name: app-store
+      url: https://apps.apple.com/tr/app/enkap-erp
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: EAS Submit (iOS → TestFlight)
+        working-directory: apps/mobile
+        run: |
+          npx eas-cli submit \
+            --platform ios \
+            --latest \
+            --non-interactive
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+      - name: EAS Submit (Android → Play Store)
+        working-directory: apps/mobile
+        run: |
+          npx eas-cli submit \
+            --platform android \
+            --latest \
+            --non-interactive
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}

@@ -1,0 +1,78 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+build/
+.next/
+out/
+
+# Environment files — NEVER commit these
+.env
+.env.local
+.env.*.local
+.env.production
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Turbo
+.turbo/
+
+# Test coverage
+coverage/
+
+# TypeScript
+*.tsbuildinfo
+
+# React Native
+.expo/
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+android/
+ios/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+*.pyc
+
+# Vault / secrets — CRITICAL: never commit
+vault-tokens/
+*.vault
+*.pem
+*.crt
+secrets/
+
+# Node compile cache (runtime artifacts)
+node-compile-cache/
+v8-compile-cache-*/
+
+# Claude Code local settings (personal, not for repo)
+.claude/
+
+# Internal archive / draft notes
+.archive/
+
+# opencode personal config
+opencode.json

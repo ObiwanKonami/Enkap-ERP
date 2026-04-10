@@ -1,0 +1,130 @@
+# Migration Runner K8s Job
+#
+# Her deployment öncesi çalıştırılır (Helm hook veya ArgoCD sync wave).
+# Control plane ve tenant schema migration'larını sıralı çalıştırır.
+#
+# Çalışma stratejisi:
+#   1. Control plane migration → enkap_control_plane DB (tenant tabloları)
+#   2. Tenant migration → Tüm aktif tenant şemaları
+#
+# İdempotent: IF NOT EXISTS, ON CONFLICT DO NOTHING — birden fazla çalışabilir.
+# Paralel güvenli: Tek instance çalışır (restartPolicy: Never).
+#
+# Kullanım:
+#   kubectl apply -f run-migrations-job.yaml
+#   kubectl wait --for=condition=complete job/enkap-migrations --timeout=300s
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: enkap-migrations
+  namespace: enkap-production
+  labels:
+    app.kubernetes.io/part-of: enkap-erp
+    app.kubernetes.io/component: migration
+  annotations:
+    # Helm hook: deployment öncesi çalış
+    "helm.sh/hook": pre-upgrade,pre-install
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 600   # 10 dakika maksimum
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: migration
+    spec:
+      restartPolicy: Never
+      serviceAccountName: enkap-migration-sa
+      initContainers:
+        # PostgreSQL hazır olana kadar bekle
+        - name: wait-for-postgres
+          image: postgres:16-alpine
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER"; do
+                echo "PostgreSQL bekleniyor..."
+                sleep 2
+              done
+              echo "PostgreSQL hazır."
+          env:
+            - name: PGHOST
+              value: "pgbouncer.enkap-production.svc.cluster.local"
+            - name: PGPORT
+              value: "6432"
+            - name: PGUSER
+              value: "enkap_admin"
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pg-credentials
+                  key: PGPASSWORD
+      containers:
+        - name: migration-runner
+          # tenant-service içindeki migration-runner kullanılır
+          # Her servis aynı migration kütüphanesini paylaşır
+          image: enkap/tenant-service:latest
+          command:
+            - node
+            - dist/provisioning/migration-runner-cli.js
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: pg-credentials
+                  key: DATABASE_URL
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: redis-credentials
+                  key: REDIS_URL
+            - name: MIGRATION_MODE
+              value: "all"   # "control_plane" | "tenants" | "all"
+            - name: NODE_ENV
+              value: "production"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+---
+# Migration için gerekli RBAC (pod'un secret'lara erişmesi için)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: enkap-migration-sa
+  namespace: enkap-production
+---
+# Migration CLI entry point için helper script
+# Bu ConfigMap migration container'ına mount edilir
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: migration-scripts
+  namespace: enkap-production
+data:
+  run-all-migrations.sh: |
+    #!/bin/sh
+    set -e
+
+    echo "=== Enkap Migration Runner ==="
+    echo "Mode: $MIGRATION_MODE"
+    echo "Tarih: $(date)"
+
+    echo ""
+    echo "--- Control Plane Migration ---"
+    node dist/provisioning/migration-runner-cli.js --target=control_plane
+
+    if [ "$MIGRATION_MODE" = "all" ] || [ "$MIGRATION_MODE" = "tenants" ]; then
+      echo ""
+      echo "--- Tenant Schema Migration ---"
+      node dist/provisioning/migration-runner-cli.js --target=tenants
+    fi
+
+    echo ""
+    echo "=== Migration tamamlandı ==="

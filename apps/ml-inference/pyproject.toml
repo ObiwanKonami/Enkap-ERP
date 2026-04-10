@@ -1,0 +1,28 @@
+[tool.poetry]
+name = "enkap-ml-inference"
+version = "0.1.0"
+description = "Enkap ERP — ML tahmin servisi (FastAPI)"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.11"
+numpy = ">=1.24,<2.0"
+fastapi = "^0.110.0"
+uvicorn = {extras = ["standard"], version = "^0.29.0"}
+scikit-learn = "^1.4.0"
+xgboost = "^2.0.3"
+prophet = "^1.1.5"
+shap = "^0.45.0"
+redis = "^5.0.3"
+bentoml = "^1.2.0"
+pydantic = "^2.6.0"
+python-jose = {extras = ["cryptography"], version = "^3.3.0"}
+
+[tool.poetry.dev-dependencies]
+pytest = "^8.0.0"
+httpx = "^0.27.0"
+ruff = "^0.3.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

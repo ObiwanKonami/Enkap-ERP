@@ -1,0 +1,564 @@
+# Kong API Route Tanımları
+#
+# Tüm API'ler /api/v1/ prefix'i ile sergilenir.
+# Mobil uygulama ve web istemcisi bu gateway üzerinden erişir.
+#
+# Auth endpoint'leri hariç tüm route'lara JWT doğrulama uygulanır.
+# JWT doğrulama Kong'da yapılmaz — backend servisler TenantGuard ile yapar.
+# Kong: rate limit + CORS + security headers + routing
+---
+# ─── Auth Service (:3001) ──────────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: auth-service-ingress
+  namespace: enkap-production
+  annotations:
+    kubernetes.io/ingress.class: kong
+    konghq.com/plugins: rate-limit-global,cors-policy,request-id,security-headers
+    # Auth endpoint'leri için özel rate limit (brute force koruması)
+    konghq.com/override: auth-rate-limit
+spec:
+  rules:
+    - host: api.enkap.com.tr
+      http:
+        paths:
+          - path: /api/v1/auth
+            pathType: Prefix
+            backend:
+              service:
+                name: auth-service
+                port:
+                  number: 3001
+---
+# Auth için daha sıkı rate limit (brute force)
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: auth-rate-limit
+  namespace: enkap-production
+plugin: rate-limiting
+config:
+  second: 5           # /auth endpoint'leri için çok daha sıkı
+  minute: 30
+  policy: redis
+  redis_host: redis.enkap-production.svc.cluster.local
+  redis_port: 6379
+---
+# ─── OAuth2 / API Marketplace (:3001, auth-service) ────────────────────────
+# /token: herkese açık (client credentials), auth-rate-limit uygulanır
+# /clients: JWT korumalı (insan kullanıcı kendi API anahtarlarını yönetir)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: oauth-token-ingress
+  namespace: enkap-production
+  annotations:
+    kubernetes.io/ingress.class: kong
+    # Token endpoint: brute force koruması (client_secret deneme saldırıları)
+    konghq.com/plugins: rate-limit-global,cors-policy,request-id,security-headers,oauth-rate-limit
+spec:
+  rules:
+    - host: api.enkap.com.tr
+      http:
+        paths:
+          - path: /api/v1/oauth/token
+            pathType: Exact
+            backend:
+              service:
+                name: auth-service
+                port:
+                  number: 3001
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: oauth-clients-ingress
+  namespace: enkap-production
+  annotations:
+    kubernetes.io/ingress.class: kong
+    # İstemci yönetimi: plan bazlı rate limit (tenant tier üzerinden)
+    konghq.com/plugins: rate-limit-global,cors-policy,request-id,security-headers,tier-based-rate-limit
+spec:
+  rules:
+    - host: api.enkap.com.tr
+      http:
+        paths:
+          - path: /api/v1/oauth/clients
+            pathType: Prefix
+            backend:
+              service:
+                name: auth-service
+                port:
+                  number: 3001
+---
+# OAuth token endpoint için özel rate limit (client_secret brute force)
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: oauth-rate-limit
+  namespace: enkap-production
+plugin: rate-limiting
+config:
+  second: 3          # /token endpoint: çok sıkı (brute force koruması)
+  minute: 20
+  hour: 200
+  policy: redis
+  redis_host: redis.enkap-production.svc.cluster.local
+  redis_port: 6379
+---
+# ─── Tenant Service (:3002) ────────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: tenant-service-ingress
+  namespace: enkap-production
+  annotations:
+    kubernetes.io/ingress.class: kong
+    konghq.com/plugins: rate-limit-global,cors-policy,request-id,security-headers
+spec:
+  rules:
+    - host: api.enkap.com.tr
+      http:
+        paths:
+          - path: /api/v1/tenants
+            pathType: Prefix
+            backend:
+              service:
+                name: tenant-service
+                port:
+                  number: 3002
+---
+# ─── Financial Service (:3003) ─────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: financial-service-ingress
+  namespace: enkap-production
+  annotations:
+    kubernetes.io/ingress.class: kong
+    konghq.com/plugins: rate-limit-global,cors-policy,request-id,security-headers
+spec:
+  rules:
+    - host: api.enkap.com.tr
+      http:
+        paths:
+          - path: /api/v1/invoices
+            pathType: Prefix
+            backend:
+              service:
+                name: financial-service
+                port:
+                  number: 3003
+          - path: /api/v1/accounts
+            pathType: Prefix
+            backend:
+              service:
+                name: financial-service
+                port:
+                  number: 3003
+          - path: /api/v1/ar-ap
+            pathType: Prefix
+            backend:
+              service:
+                name: financial-service
+                port:
+                  number: 3003
+---
+# ─── Stock Service (:3004) ─────────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: stock-service-ingress
+  namespace: enkap-production
+  annotations:
+    kubernetes.io/ingress.class: kong
+    konghq.com/plugins: rate-limit-global,cors-policy,request-id,security-headers
+spec:
+  rules:
+    - host: api.enkap.com.tr
+      http:
+        paths:
+          - path: /api/v1/products
+            pathType: Prefix
+            backend:
+              service:
+                name: stock-service
+                port:
+                  number: 3004
+          - path: /api/v1/warehouses
+            pathType: Prefix
+            backend:
+              service:
+                name: stock-service
+                port:
+                  number: 3004
+          - path: /api/v1/movements
+            pathType: Prefix
+            backend:
+              service:
+                name: stock-service
+                port:
+                  number: 3004
+          - path: /api/v1/sync
+            pathType: Prefix
+            backend:
+              service:
+                name: stock-service
+                port:
+                  number: 3004
+---
+# ─── ML Inference (:3005) ──────────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ml-inference-ingress
+  namespace: enkap-production
+  annotations:
+    kubernetes.io/ingress.class: kong
+    konghq.com/plugins: rate-limit-global,cors-policy,request-id,security-headers
+    # ML tahminler uzun sürebilir — timeout artırıldı
+    konghq.com/connect-timeout: "10000"
+    konghq.com/read-timeout: "60000"
+    konghq.com/write-timeout: "60000"
+spec:
+  rules:
+    - host: api.enkap.com.tr
+      http:
+        paths:
+          - path: /api/v1/predictions
+            pathType: Prefix
+            backend:
+              service:
+                name: ml-inference
+                port:
+                  number: 3005
+          - path: /api/v1/anomaly
+            pathType: Prefix
+            backend:
+              service:
+                name: ml-inference
+                port:
+                  number: 3005
+---
+# ─── HR Service (:3007) ─────────────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hr-service-ingress
+  namespace: enkap-production
+  annotations:
+    kubernetes.io/ingress.class: kong
+    konghq.com/plugins: rate-limit-global,cors-policy,request-id,security-headers
+spec:
+  rules:
+    - host: api.enkap.com.tr
+      http:
+        paths:
+          - path: /api/v1/employees
+            pathType: Prefix
+            backend:
+              service:
+                name: hr-service
+                port:
+                  number: 3007
+          - path: /api/v1/payroll
+            pathType: Prefix
+            backend:
+              service:
+                name: hr-service
+                port:
+                  number: 3007
+---
+# ─── Billing Service (:3008) ────────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: billing-service-ingress
+  namespace: enkap-production
+  annotations:
+    kubernetes.io/ingress.class: kong
+    konghq.com/plugins: rate-limit-global,cors-policy,request-id,security-headers
+spec:
+  rules:
+    - host: api.enkap.com.tr
+      http:
+        paths:
+          - path: /api/v1/plans
+            pathType: Prefix
+            backend:
+              service:
+                name: billing-service
+                port:
+                  number: 3008
+          - path: /api/v1/subscriptions
+            pathType: Prefix
+            backend:
+              service:
+                name: billing-service
+                port:
+                  number: 3008
+---
+# ─── Tenant Service — Onboarding + Profil (:3002) ───────────────────────────
+# Onboarding ve profil endpoint'leri tenant-service üzerinden
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: onboarding-ingress
+  namespace: enkap-production
+  annotations:
+    kubernetes.io/ingress.class: kong
+    konghq.com/plugins: rate-limit-global,cors-policy,request-id,security-headers
+    # Kayıt sırasında provizyon ~30-90s sürebilir
+    konghq.com/connect-timeout: "5000"
+    konghq.com/read-timeout: "120000"
+    konghq.com/write-timeout: "120000"
+spec:
+  rules:
+    - host: api.enkap.com.tr
+      http:
+        paths:
+          - path: /api/v1/onboarding
+            pathType: Prefix
+            backend:
+              service:
+                name: tenant-service
+                port:
+                  number: 3002
+          - path: /api/v1/tenants
+            pathType: Prefix
+            backend:
+              service:
+                name: tenant-service
+                port:
+                  number: 3002
+---
+# ─── CRM Service (:3009) ────────────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: crm-service-ingress
+  namespace: enkap-production
+  annotations:
+    kubernetes.io/ingress.class: kong
+    konghq.com/plugins: rate-limit-global,cors-policy,request-id,security-headers
+spec:
+  rules:
+    - host: api.enkap.com.tr
+      http:
+        paths:
+          - path: /api/v1/contacts
+            pathType: Prefix
+            backend:
+              service:
+                name: crm-service
+                port:
+                  number: 3009
+          - path: /api/v1/leads
+            pathType: Prefix
+            backend:
+              service:
+                name: crm-service
+                port:
+                  number: 3009
+          - path: /api/v1/activities
+            pathType: Prefix
+            backend:
+              service:
+                name: crm-service
+                port:
+                  number: 3009
+---
+# ─── Analytics Service (:3010) — sadece platform yöneticisi ────────────────
+# /admin/* endpoint'leri internal network'te kalmalı.
+# Kong burada IP whitelist + admin token kontrolü uygular.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: analytics-service-ingress
+  namespace: enkap-production
+  annotations:
+    kubernetes.io/ingress.class: kong
+    # Admin endpoint'leri: IP kısıtlaması + daha sıkı rate limit
+    konghq.com/plugins: rate-limit-global,cors-policy,request-id,security-headers,admin-ip-restriction
+spec:
+  rules:
+    - host: api.enkap.com.tr
+      http:
+        paths:
+          - path: /api/v1/admin
+            pathType: Prefix
+            backend:
+              service:
+                name: analytics-service
+                port:
+                  number: 3010
+---
+# Admin endpoint'leri için IP kısıtlaması
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: admin-ip-restriction
+  namespace: enkap-production
+plugin: ip-restriction
+config:
+  # Sadece VPN/office IP aralıklarına izin ver
+  allow:
+    - "10.0.0.0/8"       # Kubernetes cluster internal
+    - "172.16.0.0/12"    # Docker/PgBouncer network
+    # TODO: Production'da VPN IP bloğu eklenmeli
+---
+---
+# Prometheus /metrics endpoint'i için IP kısıtlaması
+# Sadece Prometheus pod'ları ve cluster-internal adreslere açık
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: metrics-ip-restriction
+  namespace: enkap-production
+plugin: ip-restriction
+config:
+  allow:
+    - "10.0.0.0/8"       # Kubernetes cluster internal (Prometheus pod'ları)
+    - "172.16.0.0/12"    # Docker network
+---
+# /metrics path'i için ayrı Ingress (IP kısıtlamalı, rate limit yok)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: enkap-metrics-ingress
+  namespace: enkap-production
+  annotations:
+    kubernetes.io/ingress.class: kong
+    konghq.com/plugins: metrics-ip-restriction
+    konghq.com/strip-path: "false"
+spec:
+  rules:
+    - host: api.enkap.com.tr
+      http:
+        paths:
+          - path: /metrics
+            pathType: Prefix
+            backend:
+              service:
+                name: auth-service       # Prometheus her pod'u doğrudan scrape eder
+                port: { number: 3001 }   # ServiceMonitor pod IP'lerini kullanır
+
+---
+# ─── White Label: Subdomain Wildcard Routing ─────────────────────────────────
+#
+# *.enkap.com.tr → Kong → tenant-service (subdomain çözümleme)
+# Kong pre-function: subdomain → tenant_id → X-Tenant-ID header
+# Downstream servisler X-Tenant-ID'den tenantId okur (TenantGuard bypass DEĞİL —
+# TenantGuard JWT'deki tenant_id'yi kontrol eder, bu header sadece routing için).
+#
+# Custom domain desteği için Let's Encrypt wildcard sertifikası gerekir:
+# cert-manager ile DNS-01 challenge (Cloudflare vb. DNS API ile).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: white-label-subdomain-ingress
+  namespace: enkap-production
+  annotations:
+    kubernetes.io/ingress.class: kong
+    konghq.com/plugins: rate-limit-global,cors-policy,request-id,security-headers,white-label-resolver
+spec:
+  rules:
+    - host: "*.enkap.com.tr"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web-service   # Next.js web uygulaması
+                port:
+                  number: 3000
+---
+# White Label domain çözümleme Lua pre-function plugin'i
+# Subdomain veya custom domain'den tenant_id bulur, X-Tenant-ID header'ı set eder.
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: white-label-resolver
+  namespace: enkap-production
+plugin: pre-function
+config:
+  access:
+    - |
+      -- White Label domain çözümleme
+      -- Host header'dan subdomain veya custom domain çıkarır,
+      -- tenant-service resolve endpoint'ini çağırarak tenant_id bulur,
+      -- upstream request'e X-Tenant-ID header'ı ekler.
+
+      local host = kong.request.get_header("Host") or ""
+      local tenant_id = nil
+
+      -- Subdomain kontrolü: {sub}.enkap.com.tr
+      local subdomain = host:match("^([^.]+)%.enkap%.com%.tr$")
+      if subdomain and subdomain ~= "api" and subdomain ~= "app" and subdomain ~= "www" then
+        -- Tenant-service resolve endpoint'ini çağır
+        local http = require "resty.http"
+        local httpc = http.new()
+        httpc:set_timeout(500)  -- 500ms timeout
+
+        local res, err = httpc:request_uri(
+          "http://tenant-service.enkap-production.svc.cluster.local:3002" ..
+          "/api/v1/white-label/resolve/subdomain?subdomain=" .. subdomain,
+          { method = "GET" }
+        )
+
+        if res and res.status == 200 and res.body then
+          local cjson = require "cjson.safe"
+          local data, _ = cjson.decode(res.body)
+          if data and data.tenantId then
+            tenant_id = data.tenantId
+          end
+        elseif err then
+          kong.log.warn("White label subdomain çözümleme hatası: ", err)
+        end
+      else
+        -- Custom domain kontrolü (subdomain değilse tam domain sorgula)
+        local http = require "resty.http"
+        local httpc = http.new()
+        httpc:set_timeout(500)
+
+        local encoded_host = ngx.escape_uri(host)
+        local res, err = httpc:request_uri(
+          "http://tenant-service.enkap-production.svc.cluster.local:3002" ..
+          "/api/v1/white-label/resolve/domain?domain=" .. encoded_host,
+          { method = "GET" }
+        )
+
+        if res and res.status == 200 and res.body then
+          local cjson = require "cjson.safe"
+          local data, _ = cjson.decode(res.body)
+          if data and data.tenantId then
+            tenant_id = data.tenantId
+          end
+        elseif err then
+          kong.log.warn("White label domain çözümleme hatası: ", err)
+        end
+      end
+
+      -- Tenant bulunduysa header set et
+      if tenant_id then
+        kong.service.request.set_header("X-Tenant-ID", tenant_id)
+        kong.service.request.set_header("X-White-Label", "true")
+      end
+---
+# TLS Sertifikası — Let's Encrypt (cert-manager ile)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: enkap-tls
+  namespace: enkap-production
+  annotations:
+    kubernetes.io/ingress.class: kong
+    cert-manager.io/cluster-issuer: letsencrypt-production
+spec:
+  tls:
+    - hosts:
+        - api.enkap.com.tr
+      secretName: enkap-tls-secret
+  rules: []  # TLS için ayrı kural gerekmez — üstteki Ingress'ler kullanır

@@ -1,0 +1,37 @@
+{
+  "name": "enkap-erp",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.33.0+sha512.10568bb4a6afb58c9eb3630da90cc9516417abebd3fabbe6739f0ae795728da1491e9db5a544c76ad8eb7570f5c4bb3d6c637b2cb41bfdcdb47fa823c8649319",
+  "scripts": {
+    "dev": "turbo run dev --parallel",
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "db:migrate": "turbo run db:migrate",
+    "clean": "turbo run clean && rm -rf node_modules",
+    "demo:seed": "ts-node --project tsconfig.json scripts/demo-seed.ts",
+    "test:unit": "jest --config tests/jest.config.ts --selectProjects unit",
+    "test:integ": "jest --config tests/jest.config.ts --selectProjects integration",
+    "test:e2e": "playwright test --config tests/e2e/playwright.config.ts",
+    "test:load": "k6 run tests/load/k6/load-test.js",
+    "test:all": "pnpm test:unit && pnpm test:e2e"
+  },
+  "devDependencies": {
+    "turbo": "^2.0.0",
+    "typescript": "^5.4.0",
+    "@types/node": "^20.0.0",
+    "prettier": "^3.2.0",
+    "eslint": "^8.57.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "reflect-metadata": "0.1.14"
+    }
+  }
+}

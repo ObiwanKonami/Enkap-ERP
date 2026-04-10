@@ -1,0 +1,122 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: billing-service
+  namespace: enkap-production
+  labels:
+    app: billing-service
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: billing-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: billing-service
+        version: v1
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "enkap-services"
+        # iyzico kimlik bilgileri Vault'tan enjekte edilir
+        vault.hashicorp.com/agent-inject-secret-iyzico: "enkap/production/iyzico"
+        vault.hashicorp.com/agent-inject-template-iyzico: |
+          {{- with secret "enkap/production/iyzico" -}}
+          export IYZICO_API_KEY="{{ .Data.data.api_key }}"
+          export IYZICO_SECRET_KEY="{{ .Data.data.secret_key }}"
+          export IYZICO_BASE_URL="{{ .Data.data.base_url }}"
+          {{- end }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3008"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: enkap-sa
+      # Dunning cron + ödeme işlemi ortasında kesilmesin
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: billing-service
+          image: ghcr.io/enkap/billing-service:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3008
+              name: http
+          envFrom:
+            - configMapRef:
+                name: enkap-config
+            - secretRef:
+                name: enkap-db-secrets
+            - secretRef:
+                name: enkap-app-secrets
+          env:
+            - name: PORT
+              value: "3008"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3008
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 3008
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: billing-service
+  namespace: enkap-production
+  labels:
+    app: billing-service
+spec:
+  type: ClusterIP
+  selector:
+    app: billing-service
+  ports:
+    - port: 3008
+      targetPort: 3008
+      name: http
+---
+# Billing 2 replica sabit — dunning cron çakışmasını önlemek için
+# HPA devre dışı: cron job tek instance varsayar (leader election TODO: Faz 5)
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: billing-service-hpa
+  namespace: enkap-production
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: billing-service
+  minReplicas: 2
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

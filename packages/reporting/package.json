@@ -1,0 +1,29 @@
+{
+  "name": "@enkap/reporting",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@enkap/shared-types": "workspace:*",
+    "@nestjs/common": "^10.0.0",
+    "pdfkit": "^0.15.0",
+    "exceljs": "^4.4.0",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/pdfkit": "^0.13.4",
+    "@types/qrcode": "^1.5.5",
+    "typescript": "^5.4.0"
+  },
+  "peerDependencies": {
+    "reflect-metadata": "0.1.14"
+  }
+}

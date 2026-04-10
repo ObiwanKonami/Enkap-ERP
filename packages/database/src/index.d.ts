@@ -1,0 +1,14 @@
+export { tenantContextStorage, getTenantContext, runWithTenantContext, } from './tenant/tenant-context.storage';
+export { TenantRoutingService, TenantNotFoundError, TenantSuspendedError, TenantProvisioningError, } from './tenant/tenant-routing.service';
+export { TenantDataSourceManager } from './tenant/tenant-datasource.manager';
+export { TenantGuard } from './tenant/tenant.guard';
+export { TenantAwareSubscriber, CrossTenantWriteError, } from './tenant/tenant-aware.subscriber';
+export { RolesGuard } from './rbac/roles.guard';
+export { Roles, ROLES_KEY } from './rbac/roles.decorator';
+export { FeatureGateGuard } from './rbac/feature-gate.guard';
+export { RequiresPlan, FEATURE_KEY } from './rbac/feature-gate.decorator';
+export { AuditModule } from './audit/audit.module';
+export { Auditable, AuditInterceptor, AUDIT_KEY } from './audit/audit.interceptor';
+export type { AuditMeta } from './audit/audit.interceptor';
+export type { AuditAction, AuditResource } from './audit/audit-log.entity';
+export { TenantModule } from './tenant/tenant.module';

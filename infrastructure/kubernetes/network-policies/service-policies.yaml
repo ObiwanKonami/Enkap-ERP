@@ -1,0 +1,428 @@
+# Servis Bazlı NetworkPolicy Kuralları
+#
+# Her servis için:
+#   - Ingress: Sadece Kong ingress veya yetkili servislerden
+#   - Egress:  Sadece ihtiyaç duyduğu bileşenlere (DB, Redis, RabbitMQ)
+#
+# Istio mTLS (strict) zaten servisler arası güven sağlar.
+# NetworkPolicy → L3/L4 ağ seviyesi ek güvence (defense in depth).
+#
+# Label konvansiyonu:
+#   app: <service-name>          (pod selector)
+#   role: database / cache / mq (altyapı bileşenleri)
+
+# ─── Auth Service (:3001) ────────────────────────────────────────────────────
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: auth-service-netpol
+  namespace: enkap-production
+spec:
+  podSelector:
+    matchLabels:
+      app: auth-service
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Kong Gateway'den gelen istekler
+    - from:
+        - podSelector:
+            matchLabels:
+              app: kong-proxy
+      ports:
+        - port: 3001
+  egress:
+    # PostgreSQL (PgBouncer üzerinden)
+    - to:
+        - podSelector:
+            matchLabels:
+              app: pgbouncer
+      ports:
+        - port: 6432
+    # Redis (JWT revokasyon, refresh token, şifre sıfırlama)
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - port: 6379
+    # SMTP (e-posta gönderimi)
+    - ports:
+        - port: 587
+          protocol: TCP
+        - port: 465
+          protocol: TCP
+
+# ─── Tenant Service (:3002) ──────────────────────────────────────────────────
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tenant-service-netpol
+  namespace: enkap-production
+spec:
+  podSelector:
+    matchLabels:
+      app: tenant-service
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: kong-proxy
+      ports:
+        - port: 3002
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: pgbouncer
+      ports:
+        - port: 6432
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - port: 6379
+    # RabbitMQ (tenant.provisioning.* olayları)
+    - to:
+        - podSelector:
+            matchLabels:
+              app: rabbitmq
+      ports:
+        - port: 5672
+    # Billing service (onboarding → abonelik başlatma)
+    - to:
+        - podSelector:
+            matchLabels:
+              app: billing-service
+      ports:
+        - port: 3008
+
+# ─── Financial Service (:3003) ───────────────────────────────────────────────
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: financial-service-netpol
+  namespace: enkap-production
+spec:
+  podSelector:
+    matchLabels:
+      app: financial-service
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: kong-proxy
+      ports:
+        - port: 3003
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: pgbouncer
+      ports:
+        - port: 6432
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - port: 6379
+    # GİB signer servisi (Java, XAdES-T)
+    - to:
+        - podSelector:
+            matchLabels:
+              app: gib-signer
+      ports:
+        - port: 8080
+    # GİB API (dış ağ — prod/test)
+    - ports:
+        - port: 443
+          protocol: TCP
+    # SMTP
+    - ports:
+        - port: 587
+          protocol: TCP
+
+# ─── Stock Service (:3004) ───────────────────────────────────────────────────
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: stock-service-netpol
+  namespace: enkap-production
+spec:
+  podSelector:
+    matchLabels:
+      app: stock-service
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: kong-proxy
+      ports:
+        - port: 3004
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: pgbouncer
+      ports:
+        - port: 6432
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - port: 6379
+    # Trendyol / Hepsiburada API (dış ağ)
+    - ports:
+        - port: 443
+          protocol: TCP
+
+# ─── ML Inference (:3005) ────────────────────────────────────────────────────
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ml-inference-netpol
+  namespace: enkap-production
+spec:
+  podSelector:
+    matchLabels:
+      app: ml-inference
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: kong-proxy
+      ports:
+        - port: 3005
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - port: 6379
+    # Feast feature server
+    - to:
+        - podSelector:
+            matchLabels:
+              app: feast-server
+      ports:
+        - port: 6566
+    # MLflow tracking server
+    - to:
+        - podSelector:
+            matchLabels:
+              app: mlflow
+      ports:
+        - port: 5000
+
+# ─── HR Service (:3007) ──────────────────────────────────────────────────────
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: hr-service-netpol
+  namespace: enkap-production
+spec:
+  podSelector:
+    matchLabels:
+      app: hr-service
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: kong-proxy
+      ports:
+        - port: 3007
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: pgbouncer
+      ports:
+        - port: 6432
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - port: 6379
+    - ports:
+        - port: 587
+          protocol: TCP
+
+# ─── Billing Service (:3008) ─────────────────────────────────────────────────
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: billing-service-netpol
+  namespace: enkap-production
+spec:
+  podSelector:
+    matchLabels:
+      app: billing-service
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: kong-proxy
+      ports:
+        - port: 3008
+    # Tenant service'ten iç çağrı
+    - from:
+        - podSelector:
+            matchLabels:
+              app: tenant-service
+      ports:
+        - port: 3008
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: pgbouncer
+      ports:
+        - port: 6432
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - port: 6379
+    # iyzico ödeme API (dış ağ)
+    - ports:
+        - port: 443
+          protocol: TCP
+    - ports:
+        - port: 587
+          protocol: TCP
+
+# ─── CRM Service (:3009) ─────────────────────────────────────────────────────
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: crm-service-netpol
+  namespace: enkap-production
+spec:
+  podSelector:
+    matchLabels:
+      app: crm-service
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: kong-proxy
+      ports:
+        - port: 3009
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: pgbouncer
+      ports:
+        - port: 6432
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - port: 6379
+
+# ─── Analytics Service (:3010) ───────────────────────────────────────────────
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: analytics-service-netpol
+  namespace: enkap-production
+spec:
+  podSelector:
+    matchLabels:
+      app: analytics-service
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Sadece cluster-internal + VPN (Kong admin-ip-restriction ile kontrol edilir)
+    - from:
+        - podSelector:
+            matchLabels:
+              app: kong-proxy
+      ports:
+        - port: 3010
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: pgbouncer
+      ports:
+        - port: 6432
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - port: 6379
+
+# ─── Prometheus Scraping ─────────────────────────────────────────────────────
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-prometheus-scrape
+  namespace: enkap-production
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: enkap-erp
+  policyTypes:
+    - Ingress
+  ingress:
+    # Prometheus pod'ları /metrics scrape yapabilir
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+          podSelector:
+            matchLabels:
+              app: prometheus
+      ports:
+        - port: 9090   # Prometheus metrics port (varsa özel)
+        - port: 3001   # auth-service /metrics
+        - port: 3002   # tenant-service /metrics
+        - port: 3003   # financial-service /metrics
+        - port: 3004   # stock-service /metrics
+        - port: 3007   # hr-service /metrics
+        - port: 3008   # billing-service /metrics
+        - port: 3009   # crm-service /metrics
+        - port: 3010   # analytics-service /metrics

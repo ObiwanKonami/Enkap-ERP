@@ -1,0 +1,121 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: financial-service
+  namespace: enkap-production
+  labels:
+    app: financial-service
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: financial-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: financial-service
+        version: v1
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "enkap-services"
+        vault.hashicorp.com/agent-inject-secret-gib: "enkap/production/gib"
+        vault.hashicorp.com/agent-inject-template-gib: |
+          {{- with secret "enkap/production/gib" -}}
+          export GIB_USERNAME="{{ .Data.data.username }}"
+          export GIB_PASSWORD="{{ .Data.data.password }}"
+          export GIB_API_ENDPOINT="{{ .Data.data.api_endpoint }}"
+          {{- end }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3003"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: enkap-sa
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: financial-service
+          image: ghcr.io/enkap/financial-service:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3003
+              name: http
+          envFrom:
+            - configMapRef:
+                name: enkap-config
+            - secretRef:
+                name: enkap-db-secrets
+            - secretRef:
+                name: enkap-app-secrets
+          env:
+            - name: PORT
+              value: "3003"
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "384Mi"
+            limits:
+              cpu: "1000m"
+              memory: "768Mi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3003
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 3003
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: financial-service
+  namespace: enkap-production
+spec:
+  type: ClusterIP
+  selector:
+    app: financial-service
+  ports:
+    - port: 3003
+      targetPort: 3003
+      name: http
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: financial-service-hpa
+  namespace: enkap-production
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: financial-service
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80

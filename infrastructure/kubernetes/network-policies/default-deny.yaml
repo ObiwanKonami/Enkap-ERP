@@ -1,0 +1,38 @@
+# Varsayılan Reddetme NetworkPolicy
+#
+# enkap-production namespace'indeki tüm pod'lar için
+# gelen ve giden trafiği varsayılan olarak reddeder.
+# Servis bazlı whitelist kuralları ayrı dosyalarda tanımlanır.
+#
+# Bu policy olmadan: Tüm pod'lar birbirine serbestçe bağlanabilir.
+# Bu policy ile: Sadece açıkça izin verilen yollar açıktır.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: enkap-production
+spec:
+  podSelector: {}   # Namespace'deki tüm pod'lar
+  policyTypes:
+    - Ingress
+    - Egress
+  # Ingress ve Egress kuralı yok → tümü reddedilir
+  # DNS çözümlemesi için egress'e kube-dns izni ayrı policy'de verilir
+---
+# Tüm pod'ların DNS çözümlemesine izin ver (zorunlu)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: enkap-production
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP

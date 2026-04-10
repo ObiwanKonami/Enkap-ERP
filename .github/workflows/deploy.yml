@@ -1,0 +1,280 @@
+name: Deploy — Build, Push, K8s Deploy
+
+on:
+  push:
+    branches: [main]       # Production deploy
+    tags: ['v*.*.*']       # Sürüm tag'i ile deploy
+  workflow_dispatch:       # Manuel tetikleme
+    inputs:
+      service:
+        description: 'Servis adı (boş = tüm servisler)'
+        required: false
+        type: choice
+        options:
+          - ''
+          - auth-service
+          - tenant-service
+          - financial-service
+          - stock-service
+          - ml-inference
+          - hr-service
+          - billing-service
+          - crm-service
+          - analytics-service
+      environment:
+        description: 'Ortam'
+        required: true
+        type: choice
+        default: staging
+        options:
+          - staging
+          - production
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false  # Deploy'ları iptal etme — tamamlansın
+
+env:
+  REGISTRY: ghcr.io
+  REGISTRY_PREFIX: ghcr.io/enkap
+  PNPM_VERSION: '9'
+  NODE_VERSION: '20'
+
+jobs:
+  changes:
+    name: Değişiklik Tespiti
+    runs-on: ubuntu-latest
+    outputs:
+      auth:      ${{ steps.filter.outputs.auth }}
+      tenant:    ${{ steps.filter.outputs.tenant }}
+      financial: ${{ steps.filter.outputs.financial }}
+      stock:     ${{ steps.filter.outputs.stock }}
+      ml:        ${{ steps.filter.outputs.ml }}
+      hr:        ${{ steps.filter.outputs.hr }}
+      billing:   ${{ steps.filter.outputs.billing }}
+      crm:       ${{ steps.filter.outputs.crm }}
+      analytics: ${{ steps.filter.outputs.analytics }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            auth:
+              - 'apps/auth-service/**'
+              - 'packages/**'
+              - 'package.json'
+            tenant:
+              - 'apps/tenant-service/**'
+              - 'packages/**'
+            financial:
+              - 'apps/financial-service/**'
+              - 'packages/**'
+            stock:
+              - 'apps/stock-service/**'
+              - 'packages/**'
+            ml:
+              - 'apps/ml-inference/**'
+            hr:
+              - 'apps/hr-service/**'
+              - 'packages/**'
+            billing:
+              - 'apps/billing-service/**'
+              - 'packages/**'
+            crm:
+              - 'apps/crm-service/**'
+              - 'packages/**'
+            analytics:
+              - 'apps/analytics-service/**'
+              - 'packages/**'
+
+  build-and-push:
+    name: Build & Push — ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    needs: [changes]
+    strategy:
+      matrix:
+        include:
+          - service: auth-service
+            changed: ${{ needs.changes.outputs.auth }}
+            dockerfile: infrastructure/docker/nestjs.Dockerfile
+            build_args: SERVICE=auth-service
+          - service: tenant-service
+            changed: ${{ needs.changes.outputs.tenant }}
+            dockerfile: infrastructure/docker/nestjs.Dockerfile
+            build_args: SERVICE=tenant-service
+          - service: financial-service
+            changed: ${{ needs.changes.outputs.financial }}
+            dockerfile: infrastructure/docker/nestjs.Dockerfile
+            build_args: SERVICE=financial-service
+          - service: stock-service
+            changed: ${{ needs.changes.outputs.stock }}
+            dockerfile: infrastructure/docker/nestjs.Dockerfile
+            build_args: SERVICE=stock-service
+          - service: ml-inference
+            changed: ${{ needs.changes.outputs.ml }}
+            dockerfile: infrastructure/docker/python.Dockerfile
+            build_args: SERVICE=ml-inference
+          - service: hr-service
+            changed: ${{ needs.changes.outputs.hr }}
+            dockerfile: infrastructure/docker/nestjs.Dockerfile
+            build_args: SERVICE=hr-service
+          - service: billing-service
+            changed: ${{ needs.changes.outputs.billing }}
+            dockerfile: infrastructure/docker/nestjs.Dockerfile
+            build_args: SERVICE=billing-service
+          - service: crm-service
+            changed: ${{ needs.changes.outputs.crm }}
+            dockerfile: infrastructure/docker/nestjs.Dockerfile
+            build_args: SERVICE=crm-service
+          - service: analytics-service
+            changed: ${{ needs.changes.outputs.analytics }}
+            dockerfile: infrastructure/docker/nestjs.Dockerfile
+            build_args: SERVICE=analytics-service
+
+    # Değişmeyen servisleri atla (manual trigger hariç)
+    if: |
+      matrix.changed == 'true' ||
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.ref, 'refs/tags/')
+
+    permissions:
+      contents: read
+      packages: write
+      id-token: write    # OIDC token (Cosign imzalama için)
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Docker Buildx Kur
+        uses: docker/setup-buildx-action@v3
+        with:
+          install: true
+
+      - name: GHCR'a Giriş
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker Metadata Oluştur
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY_PREFIX }}/${{ matrix.service }}
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build & Push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          build-args: ${{ matrix.build_args }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,scope=${{ matrix.service }},mode=max
+          platforms: linux/amd64,linux/arm64
+
+      # Container imajı Cosign ile imzala (supply chain güvenliği)
+      - name: Cosign Kur
+        uses: sigstore/cosign-installer@v3
+
+      - name: İmajı İmzala
+        run: |
+          cosign sign --yes ${{ env.REGISTRY_PREFIX }}/${{ matrix.service }}@${{ steps.build-push.outputs.digest }}
+
+  deploy-staging:
+    name: Staging Deploy
+    runs-on: ubuntu-latest
+    needs: [build-and-push]
+    environment:
+      name: staging
+      url: https://staging.enkap.com.tr
+    if: github.ref == 'refs/heads/main' || github.event.inputs.environment == 'staging'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: kubectl Kur
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.29.0'
+
+      - name: Kubeconfig Ayarla
+        run: |
+          echo "${{ secrets.KUBE_CONFIG_STAGING }}" | base64 -d > $HOME/.kube/config
+          chmod 600 $HOME/.kube/config
+
+      - name: K8s'e Deploy Et (Staging)
+        run: |
+          # ConfigMap güncelle
+          kubectl apply -f infrastructure/kubernetes/config/ -n enkap-staging
+
+          # Her servis için deployment güncelle
+          SERVICES=("auth-service" "tenant-service" "financial-service" "stock-service" "ml-inference" "hr-service" "billing-service" "crm-service" "analytics-service")
+          for SERVICE in "${SERVICES[@]}"; do
+            IMAGE="${{ env.REGISTRY_PREFIX }}/${SERVICE}:sha-${GITHUB_SHA::7}"
+            kubectl set image deployment/${SERVICE} ${SERVICE}=${IMAGE} -n enkap-staging
+            kubectl rollout status deployment/${SERVICE} -n enkap-staging --timeout=5m
+          done
+
+      - name: Smoke Test
+        run: |
+          sleep 10
+          curl -f https://staging-api.enkap.com.tr/health || exit 1
+
+  deploy-production:
+    name: Production Deploy
+    runs-on: ubuntu-latest
+    needs: [deploy-staging]
+    environment:
+      name: production
+      url: https://app.enkap.com.tr
+    # Sadece tag push veya manuel production seçiminde
+    if: |
+      startsWith(github.ref, 'refs/tags/') ||
+      github.event.inputs.environment == 'production'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: kubectl Kur
+        uses: azure/setup-kubectl@v3
+
+      - name: Kubeconfig Ayarla
+        run: |
+          echo "${{ secrets.KUBE_CONFIG_PRODUCTION }}" | base64 -d > $HOME/.kube/config
+          chmod 600 $HOME/.kube/config
+
+      - name: K8s'e Deploy Et (Production)
+        run: |
+          kubectl apply -f infrastructure/kubernetes/config/ -n enkap-production
+          kubectl apply -f infrastructure/kubernetes/services/ -n enkap-production
+
+          SERVICES=("auth-service" "tenant-service" "financial-service" "stock-service" "ml-inference" "hr-service" "billing-service" "crm-service" "analytics-service")
+          for SERVICE in "${SERVICES[@]}"; do
+            IMAGE="${{ env.REGISTRY_PREFIX }}/${SERVICE}:${{ github.ref_name }}"
+            kubectl set image deployment/${SERVICE} ${SERVICE}=${IMAGE} -n enkap-production
+            kubectl rollout status deployment/${SERVICE} -n enkap-production --timeout=10m
+          done
+
+      - name: Production Smoke Test
+        run: |
+          sleep 15
+          curl -f https://api.enkap.com.tr/health || exit 1
+
+      - name: Rollback (başarısız ise)
+        if: failure()
+        run: |
+          SERVICES=("auth-service" "tenant-service" "financial-service" "stock-service" "ml-inference" "hr-service" "billing-service" "crm-service" "analytics-service")
+          for SERVICE in "${SERVICES[@]}"; do
+            kubectl rollout undo deployment/${SERVICE} -n enkap-production
+          done
+          echo "ROLLBACK TAMAMLANDI"

@@ -1,0 +1,109 @@
+{
+  "common": {
+    "loading": "Yükleniyor...",
+    "error": "Hata oluştu",
+    "retry": "Tekrar Dene",
+    "cancel": "İptal",
+    "save": "Kaydet",
+    "close": "Kapat",
+    "search": "Ara...",
+    "noData": "Veri bulunamadı",
+    "offline": "Çevrimdışı mod",
+    "syncing": "Senkronize ediliyor...",
+    "lastSync": "Son senkronizasyon: {{time}}"
+  },
+  "auth": {
+    "login": "Giriş Yap",
+    "logout": "Çıkış Yap",
+    "email": "E-posta",
+    "password": "Şifre",
+    "tenantSlug": "Firma Kodu",
+    "loginButton": "Giriş Yap",
+    "biometric": "Biyometrik ile Giriş",
+    "loginError": "E-posta veya şifre hatalı",
+    "sessionExpired": "Oturum süresi doldu, lütfen tekrar giriş yapın"
+  },
+  "tabs": {
+    "dashboard": "Özet",
+    "invoices": "Faturalar",
+    "stock": "Stok",
+    "scanner": "Tara"
+  },
+  "dashboard": {
+    "title": "Genel Özet",
+    "todayRevenue": "Bugünkü Ciro",
+    "monthRevenue": "Aylık Ciro",
+    "overdueReceivables": "Vadesi Geçmiş Alacak",
+    "stockAlerts": "Stok Uyarısı",
+    "forecastTitle": "30 Günlük Satış Tahmini",
+    "forecastTotal": "Tahmini Toplam",
+    "anomalyAlert": "Anomali Tespit Edildi",
+    "anomalyCount": "{{count}} adet anormal hareket",
+    "cashRiskAlert": "Nakit Risk Uyarısı",
+    "greeting": "Merhaba, {{name}}"
+  },
+  "invoice": {
+    "title": "Faturalar",
+    "newInvoice": "Yeni Fatura",
+    "number": "Fatura No",
+    "date": "Tarih",
+    "dueDate": "Vade",
+    "buyer": "Alıcı",
+    "total": "Toplam",
+    "status": {
+      "DRAFT": "Taslak",
+      "PENDING_GIB": "GİB'e Gönderildi",
+      "ACCEPTED_GIB": "GİB Onaylı",
+      "REJECTED_GIB": "GİB Reddetti",
+      "CANCELLED": "İptal"
+    },
+    "type": {
+      "E_FATURA": "e-Fatura",
+      "E_ARSIV": "e-Arşiv"
+    },
+    "filters": {
+      "all": "Tümü",
+      "draft": "Taslak",
+      "approved": "Onaylı",
+      "rejected": "Reddedilen"
+    },
+    "detail": {
+      "lines": "Kalemler",
+      "subtotal": "Ara Toplam",
+      "kdv": "KDV",
+      "discount": "İndirim",
+      "total": "Toplam",
+      "notes": "Notlar",
+      "approve": "Onayla ve GİB'e Gönder",
+      "cancel": "Faturayı İptal Et"
+    }
+  },
+  "stock": {
+    "title": "Stok",
+    "product": "Ürün",
+    "sku": "SKU",
+    "barcode": "Barkod",
+    "quantity": "Miktar",
+    "unit": "Birim",
+    "lowStock": "Düşük Stok",
+    "noStock": "Stok Yok",
+    "movement": {
+      "GIRIS": "Giriş",
+      "CIKIS": "Çıkış",
+      "TRANSFER": "Transfer",
+      "SAYIM": "Sayım",
+      "FIRE": "Fire"
+    }
+  },
+  "scanner": {
+    "title": "Barkod Tara",
+    "instruction": "Barkodu çerçeve içine alın",
+    "found": "Ürün Bulundu",
+    "notFound": "Ürün bulunamadı: {{barcode}}",
+    "permissionRequired": "Kamera izni gerekli",
+    "permissionButton": "İzin Ver"
+  },
+  "currency": {
+    "try": "₺{{amount}}"
+  }
+}

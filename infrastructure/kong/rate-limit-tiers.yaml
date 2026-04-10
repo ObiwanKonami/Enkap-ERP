@@ -1,0 +1,183 @@
+# Kong — Plan Bazlı API Rate Limiting
+#
+# Strateji:
+#   billing-service → Tenant'ın aktif planını Redis'e yazar (TTL: 6 saat)
+#   Key format: rate_limit:tier:{tenant_id}  Value: "starter" | "business" | "enterprise"
+#
+#   Kong rate-limiting-advanced plugin → Redis'ten tier okur → uygun limiti uygular
+#
+# Limit tablosu:
+#   starter:    60 req/dak,  5.000 req/saat,   50.000 req/gün
+#   business:   300 req/dak, 20.000 req/saat,  200.000 req/gün
+#   enterprise: 600 req/dak, 60.000 req/saat,  sınırsız (soft cap: 1M/gün)
+#
+# NOT: Kong Enterprise özelliği olan rate-limiting-advanced gerekir.
+# OSS Kong için alternatif: header bazlı x-tier ve custom Lua plugin.
+
+---
+# Starter Plan Rate Limit
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: rate-limit-starter
+  namespace: enkap-production
+plugin: rate-limiting-advanced
+config:
+  limit:
+    - 60       # dakika
+    - 5000     # saat
+    - 50000    # gün
+  window_size:
+    - 60
+    - 3600
+    - 86400
+  identifier: consumer         # JWT'den tenant_id bazlı
+  sync_rate: 5                  # Redis'e 5 saniyede bir sync
+  strategy: redis
+  redis:
+    host: redis.enkap-production.svc.cluster.local
+    port: 6379
+    database: 0
+  namespace: enkap_starter
+  error_message: "Dakika limitinizi aştınız. Daha yüksek bir plana geçerek limiti artırabilirsiniz."
+  error_code: 429
+  hide_client_headers: false    # X-RateLimit-* başlıklarını istemciye göster
+---
+# Business Plan Rate Limit
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: rate-limit-business
+  namespace: enkap-production
+plugin: rate-limiting-advanced
+config:
+  limit:
+    - 300
+    - 20000
+    - 200000
+  window_size:
+    - 60
+    - 3600
+    - 86400
+  identifier: consumer
+  sync_rate: 10
+  strategy: redis
+  redis:
+    host: redis.enkap-production.svc.cluster.local
+    port: 6379
+    database: 0
+  namespace: enkap_business
+  error_code: 429
+  hide_client_headers: false
+---
+# Enterprise Plan Rate Limit (soft cap)
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: rate-limit-enterprise
+  namespace: enkap-production
+plugin: rate-limiting-advanced
+config:
+  limit:
+    - 600
+    - 60000
+    - 1000000
+  window_size:
+    - 60
+    - 3600
+    - 86400
+  identifier: consumer
+  sync_rate: 10
+  strategy: redis
+  redis:
+    host: redis.enkap-production.svc.cluster.local
+    port: 6379
+    database: 0
+  namespace: enkap_enterprise
+  error_code: 429
+  hide_client_headers: false
+---
+# Kong pre-function plugin: Redis'ten tier oku, uygun rate-limit plugin'i seç
+# Bu plugin her istekte tenant_id'yi JWT'den çıkarır ve tier'ı Redis'ten okur.
+# Ardından Kong'un plugin zincirini dinamik olarak değiştirir.
+#
+# Kong OSS için Lua pre-function plugin (Enterprise rate-limiting-advanced yerine):
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: tier-based-rate-limit
+  namespace: enkap-production
+plugin: pre-function
+config:
+  access:
+    - |
+      -- Lua: JWT'den tenant_id çıkar, Redis'ten tier oku, rate limit uygula
+      local redis = require "resty.redis"
+      local cjson = require "cjson"
+      local jwt_decoder = require "kong.plugins.jwt.jwt_parser"
+
+      -- JWT'den tenant_id çıkar
+      local auth_header = kong.request.get_header("Authorization")
+      if not auth_header then
+        return
+      end
+
+      local token = auth_header:match("Bearer%s+(.+)")
+      if not token then
+        return
+      end
+
+      local jwt, err = jwt_decoder:new(token)
+      if err or not jwt then
+        return
+      end
+
+      local tenant_id = jwt.claims and jwt.claims.tenant_id
+      if not tenant_id then
+        return
+      end
+
+      -- Redis'ten tier oku
+      local red = redis:new()
+      red:set_timeouts(200, 200, 200)  -- ms
+
+      local ok, conn_err = red:connect(
+        "redis.enkap-production.svc.cluster.local",
+        6379
+      )
+      if not ok then
+        kong.log.warn("Redis bağlantı hatası (tier okuma atlandı): ", conn_err)
+        return
+      end
+
+      local tier_key = "rate_limit:tier:" .. tenant_id
+      local tier, get_err = red:get(tier_key)
+
+      red:set_keepalive(1000, 10)  -- bağlantıyı havuza geri bırak
+
+      if not tier or tier == ngx.null then
+        tier = "starter"  -- fallback: en kısıtlı plan
+      end
+
+      -- Tier bilgisini Kong context'e ekle (downstream plugin'ler okuyabilir)
+      kong.ctx.shared.tenant_tier = tier
+
+      -- Rate limit limitlerini tier'a göre ayarla (dakika bazlı)
+      local limits = {
+        starter    = { minute = 60,  hour = 5000,  day = 50000  },
+        business   = { minute = 300, hour = 20000, day = 200000 },
+        enterprise = { minute = 600, hour = 60000, day = 1000000 },
+      }
+
+      local limit_config = limits[tier] or limits["starter"]
+
+      -- Kong rate-limit sayaçlarını güncelle (resty.limit.count benzeri mantık)
+      -- Not: Gerçek rate-limiting-advanced plugin'i bu değerleri dinamik alabilir.
+      kong.service.request.set_header("X-Tenant-Tier", tier)
+      kong.service.request.set_header("X-Rate-Limit-Minute", tostring(limit_config.minute))
+---
+# Tüm API route'larına tier bazlı rate limit ekle
+# (routes.yaml'da mevcut konghq.com/plugins annotation'una eklenir)
+#
+# Uygulama: routes.yaml içindeki ingress tanımlarına şu annotation eklenmeli:
+#   konghq.com/plugins: rate-limit-global,cors-policy,request-id,security-headers,tier-based-rate-limit

@@ -1,0 +1,186 @@
+name: CI — Test, Typecheck, Lint
+
+on:
+  push:
+    branches: [main, develop, 'feature/**', 'fix/**']
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  # Aynı branch için eski çalışan workflow'u iptal et
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '20'
+  PNPM_VERSION: '9'
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  # ─── TypeScript Servisler ──────────────────────────────────────────────────
+  typecheck:
+    name: Typecheck (TypeScript)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Bağımlılıkları Yükle
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+  lint:
+    name: Lint (ESLint + Ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Bağımlılıkları Yükle
+        run: pnpm install --frozen-lockfile
+
+      - name: ESLint
+        run: pnpm lint
+
+      # Python ML servisi lint
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Ruff (Python)
+        run: |
+          pip install ruff
+          ruff check apps/ml-inference/src/
+
+  test-backend:
+    name: Test (NestJS)
+    runs-on: ubuntu-latest
+    needs: [typecheck]
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: enkap_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      NODE_ENV: test
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_USERNAME: test_user
+      DB_PASSWORD: test_password
+      DB_NAME: enkap_test
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
+      JWT_SECRET: test-secret-do-not-use-in-production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Bağımlılıkları Yükle
+        run: pnpm install --frozen-lockfile
+
+      - name: Build (shared packages)
+        run: pnpm --filter @enkap/shared-types build && pnpm --filter @enkap/database build
+
+      - name: Test
+        run: pnpm test --filter !@enkap/mobile
+
+      - name: Upload Coverage
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          flags: backend
+
+  test-python:
+    name: Test (Python ML)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Bağımlılıkları Yükle
+        working-directory: apps/ml-inference
+        run: |
+          pip install poetry
+          poetry install --no-root
+
+      - name: Test
+        working-directory: apps/ml-inference
+        env:
+          FEAST_USE_STUB: "true"
+          MLFLOW_USE_STUB: "true"
+        run: poetry run pytest tests/ -v --tb=short
+
+  security-scan:
+    name: Güvenlik Taraması
+    runs-on: ubuntu-latest
+    needs: [typecheck]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trivy — Bağımlılık Güvenlik Taraması
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          severity: 'HIGH,CRITICAL'
+          exit-code: '1'         # Kritik açık varsa CI başarısız
+          ignore-unfixed: true
+
+      - name: npm audit
+        run: |
+          npm audit --audit-level=high --production || true
+          # Sonuçları log'la ama CI'yi durdurma (advisory olabilir)
